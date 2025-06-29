@@ -1,114 +1,225 @@
+"""
+LinkedIn Authenticator - Handles LinkedIn Login Process
+
+This module manages the authentication process for LinkedIn, including:
+- Login form detection and interaction
+- Multi-factor authentication handling  
+- Session validation and maintenance
+- Error handling for common login issues
+
+The authenticator uses Selenium WebDriver to interact with LinkedIn's login interface
+and handles various authentication scenarios including 2FA challenges.
+
+Author: AI-Enhanced LinkedIn Job Application Bot
+Date: 2025
+"""
+
 import time
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+from logging_config import logger
+
+
 class LinkedInAuthenticator:
+    """
+    Handles LinkedIn authentication process using Selenium WebDriver.
+    
+    This class manages the complete login workflow including:
+    - Initial login form submission
+    - Multi-factor authentication challenges
+    - Session validation  
+    - Error detection and handling
+    """
     
     def __init__(self, driver=None):
+        """
+        Initialize the LinkedIn authenticator.
+        
+        Args:
+            driver: Selenium WebDriver instance for browser automation
+        """
         self.driver = driver
         self.email = ""
         self.password = ""
 
-    def set_secrets(self, email, password):
+    def set_secrets(self, email: str, password: str) -> None:
+        """
+        Set login credentials for authentication.
+        
+        Args:
+            email: LinkedIn account email address
+            password: LinkedIn account password
+        """
         self.email = email
         self.password = password
 
-    def start(self):
-        """Start the Chrome browser and attempt to log in to LinkedIn."""
-        print("Starting Chrome browser to log in to LinkedIn.")
+    def start(self) -> None:
+        """
+        Start the authentication process by navigating to LinkedIn and logging in.
+        
+        This method initiates the complete login workflow:
+        1. Navigate to LinkedIn homepage
+        2. Check if already logged in
+        3. Handle login process if needed
+        """
+        logger.debug("LinkedInAuthenticator.start - Navigating to LinkedIn homepage...")
         self.driver.get('https://www.linkedin.com')
         self.wait_for_page_load()
+        
         if not self.is_logged_in():
+            logger.info("Not logged in, initiating login process...")
             self.handle_login()
+        else:
+            logger.info("Already logged in to LinkedIn")
 
-    def handle_login(self):
-        """Handle the LinkedIn login process."""
-        print("Navigating to the LinkedIn login page...")
+    def handle_login(self) -> None:
+        """
+        Handle the complete LinkedIn login process.
+        
+        This method manages the login workflow including credential entry,
+        form submission, and post-login security checks.
+        """
+        logger.debug("LinkedInAuthenticator.handle_login - Navigating to login page...")
         self.driver.get("https://www.linkedin.com/login")
+        
         try:
+            # Enter credentials and submit form
             self.enter_credentials()
             self.submit_login_form()
-        except NoSuchElementException:
-            print("Could not log in to LinkedIn. Please check your credentials.")
-        time.sleep(8) #TODO fix better
-        self.handle_security_check()
+            
+            # Wait for login to process
+            time.sleep(8)  # Allow time for login processing and redirects
+            
+            # Handle any security challenges
+            self.handle_security_check()
+            
+        except NoSuchElementException as e:
+            logger.error(f"LinkedInAuthenticator.handle_login - Login failed: {e}")
+            logger.error("Could not log in to LinkedIn. Please check your credentials.")
 
-    def enter_credentials(self):
-        """Enter the user's email and password into the login form."""
+    def enter_credentials(self) -> None:
+        """
+        Enter email and password into the LinkedIn login form.
+        
+        Raises:
+            TimeoutException: If login form elements are not found within timeout
+        """
         try:
-            email_field = WebDriverWait(self.driver, 3).until(
+            logger.debug("Entering login credentials...")
+            
+            # Wait for and fill email field
+            email_field = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, "username"))
             )
+            email_field.clear()
             email_field.send_keys(self.email)
+            
+            # Fill password field
             password_field = self.driver.find_element(By.ID, "password")
+            password_field.clear()
             password_field.send_keys(self.password)
+            
+            logger.debug("Credentials entered successfully")
+            
         except TimeoutException:
-            print("Login form not found. Aborting login.")
+            logger.error("LinkedInAuthenticator.enter_credentials - Login form not found. Aborting login.")
+            raise
 
-    def submit_login_form(self):
-        """Submit the LinkedIn login form."""
+    def submit_login_form(self) -> None:
+        """
+        Submit the LinkedIn login form by clicking the submit button.
+        
+        Raises:
+            NoSuchElementException: If login button is not found
+        """
         try:
+            logger.debug("Submitting login form...")
             login_button = self.driver.find_element(By.XPATH, '//button[@type="submit"]')
             login_button.click()
+            logger.debug("Login form submitted successfully")
+            
         except NoSuchElementException:
-            print("Login button not found. Please verify the page structure.")
+            logger.error("LinkedInAuthenticator.submit_login_form - Login button not found. Please verify the page structure.")
+            raise
 
     def handle_security_check(self, max_wait_minutes: int = 5) -> None:
         """
-        If LinkedIn shows a checkpoint (captcha, e-mail/SMS code, etc.),
-        pause and let the user solve it in the browser UI.
+        Handle LinkedIn security challenges such as captcha or verification codes.
+        
+        This method waits for the user to manually complete security challenges
+        in the browser and monitors for successful completion.
+        
+        Args:
+            max_wait_minutes: Maximum time to wait for security check completion
+            
+        Raises:
+            RuntimeError: If security checkpoint is not resolved within the timeout
         """
+        logger.debug("Checking for security challenges...")
         end_time = time.time() + max_wait_minutes * 60
+        
         while time.time() < end_time:
-            url = self.driver.current_url
-            if "/feed" in url:
-                print("Security check cleared – landed on the feed page.")
+            current_url = self.driver.current_url
+            
+            # Check if we've successfully reached the feed page
+            if "/feed" in current_url:
+                logger.info("Security check cleared - landed on the feed page")
                 return
-            if "/checkpoint/" in url:
-                print("Security checkpoint detected. Please solve it in the open tab…")
+                
+            # Check if we're on a checkpoint page
+            if "/checkpoint/" in current_url:
+                logger.warning("Security checkpoint detected. Please solve it in the open browser tab...")
+                logger.info("Waiting for manual completion...")
+                
             time.sleep(5)
 
-        raise RuntimeError("Login aborted: security checkpoint not passed in time.")
+        raise RuntimeError("Login aborted: security checkpoint not passed within time limit")
 
-
-    # def handle_security_check(self):
-    #     """Handle LinkedIn security checks if triggered."""
-    #     try:
-    #         print("Checking for url challengesV2")
-    #         WebDriverWait(self.driver, 8).until(
-    #             EC.url_contains('https://www.linkedin.com/checkpoint/challengesV2/')
-    #         )
-
-    #         print("Security checkpoint detected. Please complete the challenge.")
-    #         WebDriverWait(self.driver, 8).until(
-    #             EC.url_contains('https://www.linkedin.com/feed/')
-    #         )
-    #         print("Security check completed")
-    #     except TimeoutException:
-    #         print("Security check not completed. Please try again later.")
-
-    def is_logged_in(self):
-        """Check if the user is already logged in to LinkedIn."""
-        self.driver.get('https://www.linkedin.com/feed')
+    def is_logged_in(self) -> bool:
+        """
+        Check if the user is already logged in to LinkedIn.
+        
+        This method navigates to the LinkedIn feed and looks for elements
+        that indicate a successful login state.
+        
+        Returns:
+            bool: True if logged in, False otherwise
+        """
         try:
-            WebDriverWait(self.driver, 2).until(
+            logger.debug("Checking if already logged in...")
+            self.driver.get('https://www.linkedin.com/feed')
+            
+            # Look for the "Start a post" button which indicates logged-in state
+            WebDriverWait(self.driver, 5).until(
                 EC.presence_of_element_located((By.CLASS_NAME, 'share-box-feed-entry__trigger'))
             )
+            
             buttons = self.driver.find_elements(By.CLASS_NAME, 'share-box-feed-entry__trigger')
-            if any(button.text.strip() == 'Start a post' for button in buttons):
-                print("User is already logged in.")
-                return True
+            for button in buttons:
+                if 'start a post' in button.text.strip().lower():
+                    logger.info("User is already logged in to LinkedIn")
+                    return True
+                    
         except TimeoutException:
-            pass
+            logger.debug("Login verification elements not found")
+            
         return False
 
-    def wait_for_page_load(self, timeout=2):
-        """Wait for the page to fully load."""
+    def wait_for_page_load(self, timeout: int = 10) -> None:
+        """
+        Wait for the page to fully load by checking document ready state.
+        
+        Args:
+            timeout: Maximum time to wait for page load in seconds
+        """
         try:
             WebDriverWait(self.driver, timeout).until(
                 lambda d: d.execute_script('return document.readyState') == 'complete'
             )
+            logger.debug("Page loaded successfully")
+            
         except TimeoutException:
-            print("Page load timed out.")
+            logger.warning("LinkedInAuthenticator.wait_for_page_load - Page load timed out, continuing anyway")

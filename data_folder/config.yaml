@@ -3,7 +3,7 @@ remote: true
 experienceLevel:
   internship: true
   entry: true
-  associate: true
+  associate: false
   mid-senior level: false
   director: false
   executive: false
@@ -12,7 +12,7 @@ jobTypes:
   full-time: true
   contract: false
   part-time: false
-  temporary: true
+  temporary: false
   internship: false
   other: false
   volunteer: false

@@ -1,3 +1,27 @@
+"""
+LinkedIn Job Search and Application Manager
+
+This module manages the job search and application process for LinkedIn Easy Apply.
+It handles search parameter configuration, job filtering, pagination, and coordinates
+with the Easy Apply form handler to submit applications.
+
+Key Features:
+- Job search across multiple positions and locations
+- Blacklist filtering for companies and job titles
+- Persistent storage of successful applications and failed attempts
+- Integration with AI-powered form completion
+- CSV-based tracking and logging of application status
+
+Classes:
+    EnvironmentKeys: Environment configuration helper
+    LinkedInJobManager: Main job search and application coordinator
+
+Dependencies:
+    - Selenium WebDriver for browser automation
+    - CSV handling for data persistence
+    - Integration with LinkedIn Easy Apply handler
+"""
+
 import csv
 import os
 import random
@@ -5,60 +29,118 @@ import time
 import traceback
 from itertools import product
 from pathlib import Path
-from selenium.common.exceptions import NoSuchElementException
+
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
 import utils
 from job import Job
 from linkedIn_easy_applier import LinkedInEasyApplier
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-from selenium.webdriver.support import expected_conditions as EC
+from logging_config import logger
 
 
 class EnvironmentKeys:
+    """
+    Environment configuration helper for LinkedIn job manager.
+    
+    Loads configuration values from environment variables with defaults.
+    """
+    
     def __init__(self):
+        """Initialize environment configuration from environment variables."""
         self.skip_apply = self._read_env_key_bool("SKIP_APPLY")
         self.disable_description_filter = self._read_env_key_bool("DISABLE_DESCRIPTION_FILTER")
 
     @staticmethod
     def _read_env_key(key: str) -> str:
+        """Read environment variable as string."""
         return os.getenv(key, "")
 
     @staticmethod
     def _read_env_key_bool(key: str) -> bool:
+        """Read environment variable as boolean."""
         return os.getenv(key) == "True"
 
+
 class LinkedInJobManager:
+    """
+    LinkedIn Job Search and Application Manager
+    
+    Manages the complete job search and application workflow including:
+    - Search parameter configuration
+    - Job discovery and filtering
+    - Application submission coordination
+    - Result tracking and persistence
+    
+    Attributes:
+        driver: Selenium WebDriver instance
+        set_old_answers: Dictionary of previously answered questions
+        easy_applier_component: LinkedIn Easy Apply form handler
+        company_blacklist: List of companies to skip
+        title_blacklist: List of job title keywords to skip
+        positions: List of job positions to search for
+        locations: List of locations to search in
+        seen_jobs: List of job URLs already processed
+    """
+    
     def __init__(self, driver):
+        """
+        Initialize the LinkedIn job manager.
+        
+        Args:
+            driver: Selenium WebDriver instance for browser automation
+        """
         self.driver = driver
-        self.set_old_answers: dict[tuple[str, str], str] = {}  # (type, substr) ➜ answer
+        self.set_old_answers: dict[tuple[str, str], str] = {}
         self.easy_applier_component = None
 
     def set_parameters(self, parameters):
+        """
+        Configure job search parameters and initialize components.
+        
+        Args:
+            parameters: Dictionary containing search configuration including
+                      positions, locations, blacklists, resume path, etc.
+        """
         self.company_blacklist = parameters.get('companyBlacklist', []) or []
         self.title_blacklist = parameters.get('titleBlacklist', []) or []
         self.positions = parameters.get('positions', [])
         self.locations = parameters.get('locations', [])
         self.base_search_url = self.get_base_search_url(parameters)
         self.seen_jobs = []
+        
+        # Configure resume path
         resume_path = parameters.get('uploads', {}).get('resume', None)
         if resume_path is not None and Path(resume_path).exists():
             self.resume_dir = Path(resume_path)
         else:
             self.resume_dir = None
+            
         self.output_file_directory = Path(parameters['outputFileDirectory'])
         self.env_config = EnvironmentKeys()
-        self.old_question()  
+        self.old_question()
 
     def set_gpt_answerer(self, gpt_answerer):
+        """
+        Set the GPT answerer component for AI-powered form completion.
+        
+        Args:
+            gpt_answerer: AI service for generating form responses
+        """
         self.gpt_answerer = gpt_answerer
 
     def old_question(self):
         """
-        Load old answers from a CSV file into a dictionary.
+        Load previously answered questions from CSV file for reuse.
+        
+        Loads answers from 'data_folder/output/old_Questions.csv' to avoid
+        asking the same questions repeatedly during application sessions.
         """
         self.set_old_answers = {}
         file_path = 'data_folder/output/old_Questions.csv'
+        
         if os.path.exists(file_path):
             with open(file_path, 'r', newline='', encoding='utf-8', errors='ignore') as file:
                 csv_reader = csv.reader(file, delimiter=',', quotechar='"')
@@ -106,20 +188,20 @@ class LinkedInJobManager:
         for position, location in searches:
             location_url    = f"&location={location}"
             job_page_number = -1
-            utils.printyellow(f"Starting the search for {position} in {location}.")
+            logger.info(f"Starting the search for {position} in {location}.")
 
             try:
                 while True:
                     page_sleep      += 1
                     job_page_number += 1
 
-                    utils.printyellow(f"Going to job page {job_page_number}")
+                    logger.info(f"Going to job page {job_page_number}")
                     self.next_job_page(position, location_url, job_page_number)
                     time.sleep(random.uniform(0.2, 1.0))
 
-                    utils.printyellow("Starting the application process for this page…")
+                    logger.info("Starting the application process for this page…")
                     self.apply_jobs()
-                    utils.printyellow("Applications on this page completed ✔")
+                    logger.info("Applications on this page completed ✔")
 
                     # stay human-like – minimum dwell time
                     time_left = minimum_page_time - time.time()
@@ -131,7 +213,7 @@ class LinkedInJobManager:
                     if page_sleep % 5 == 0:
                         page_sleep += 1
             except Exception:
-                utils.printred(f"Error on page {job_page_number}:\n{traceback.format_exc()}")
+                logger.error(f"Error on page {job_page_number}:\n{traceback.format_exc()}")
                 break
 
 
@@ -188,25 +270,36 @@ class LinkedInJobManager:
     #             page_sleep += 1
 
     def apply_jobs(self):
+        """
+        Process all job listings on the current page and attempt to apply.
+        
+        Extracts job information from each tile, applies filtering logic,
+        and delegates actual application to the Easy Apply component.
+        Records results to CSV files for tracking.
+        
+        Raises:
+            Exception: If no jobs are found or other critical errors occur
+        """
         try:
-            print("first try entered")
+            # Check for "no results found" message
             try:
                 no_jobs_elements = self.driver.find_elements(By.CLASS_NAME, 'artdeco-empty-state__headline')
                 no_jobs_text_found = False
                 for el in no_jobs_elements:
                     if 'no results found' in el.text.lower():
-                        print("No jobs found")
+                        logger.warning("No jobs found")
                         no_jobs_text_found = True
                         break
 
                 if no_jobs_text_found:
                     raise Exception("No more jobs on this page")
             except NoSuchElementException as e:
-                print(f"NoSuchElementException: {e}")
+                logger.error(f"NoSuchElementException: {e}")
                 pass
             
-            print("fetching job results")
+            logger.info("Fetching job results")
 
+            # Wait for job tiles to load
             try:
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located(
@@ -214,32 +307,35 @@ class LinkedInJobManager:
                     )
                 )
             except TimeoutException:
-                print("⚠️ No job tiles showed up in 10s. Here's a page snippet:")
+                logger.warning("⚠️ No job tiles showed up in 10s. Here's a page snippet:")
                 snippet = self.driver.page_source[:500].replace("\n", "")
-                print(snippet)
+                logger.warning(snippet)
                 raise
             
             job_list_elements = self.driver.find_elements(
                 By.CSS_SELECTOR, "li[data-occludable-job-id]"
             )
 
-            print(f"Found {len(job_list_elements)} job tiles")
+            logger.info(f"Found {len(job_list_elements)} job tiles")
             if not job_list_elements:
                 raise Exception("No job tiles found on page")
 
+            # Scroll each tile into view
             for tile in job_list_elements:
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tile)
             
+            # Extract job information from tiles
             job_list = [
                 Job(*self.extract_job_information_from_tile(tile))
                 for tile in job_list_elements
             ]
 
-            print(job_list)
+            logger.debug(f"Job list: {job_list}")
 
+            # Process each job
             for job in job_list:
                 if self.is_blacklisted(job.title, job.company, job.link):
-                    utils.printyellow(f"Blacklisted {job.title} at {job.company}, skipping...")
+                    logger.warning(f"Blacklisted {job.title} at {job.company}, skipping...")
                     self.write_to_file(job.company, job.location, job.title, job.link, "skipped")
                     continue
 
@@ -248,8 +344,9 @@ class LinkedInJobManager:
                         self.easy_applier_component.job_apply(job)
                 except Exception:
                     self.write_to_file(job.company, job.location, job.title, job.link, "failed")
-                    utils.printred("apply_jobs failed:\n" + traceback.format_exc())
+                    logger.error("apply_jobs failed:\n" + traceback.format_exc())
                     continue
+                    
                 self.write_to_file(job.company, job.location, job.title, job.link, "success")
                 self.seen_jobs.append(job.link)
         
@@ -335,9 +432,7 @@ class LinkedInJobManager:
             # clean url
             link = a_tag.get_attribute("href").split("?")[0]
         except Exception:
-            utils.printred(
-                f"[extract] title/link failed:\n{traceback.format_exc()}"
-            )
+            logger.error(f"[extract] title/link failed:\n{traceback.format_exc()}")
 
         # 2) Company
         try:
@@ -345,9 +440,7 @@ class LinkedInJobManager:
                 By.CSS_SELECTOR, ".artdeco-entity-lockup__subtitle span"
             ).text.strip()
         except Exception:
-            utils.printred(
-                f"[extract] company failed:\n{traceback.format_exc()}"
-            )
+            logger.error(f"[extract] company failed:\n{traceback.format_exc()}")
 
         # 3) Location
         try:
@@ -356,9 +449,7 @@ class LinkedInJobManager:
                 "ul.job-card-container__metadata-wrapper li span"
             ).text.strip()
         except Exception:
-            utils.printred(
-                f"[extract] location failed:\n{traceback.format_exc()}"
-            )
+            logger.error(f"[extract] location failed:\n{traceback.format_exc()}")
 
         # 4) Apply method (e.g. “Easy Apply” or “Apply on company site”)
         try:

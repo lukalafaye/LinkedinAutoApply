@@ -1,3 +1,21 @@
+"""
+String Templates and Prompts - AI Prompt Templates and Text Resources
+
+This module contains all the string templates, prompts, and text resources used
+throughout the LinkedIn job application bot. It includes templates for:
+- Resume generation and optimization
+- Job description analysis  
+- Cover letter creation
+- Question answering prompts
+
+These templates are designed to work with GPT models to generate high-quality,
+contextual responses for job applications.
+
+Author: AI-Enhanced LinkedIn Job Application Bot
+Date: 2025
+"""
+
+# Resume generation template for creating ATS-friendly resumes
 resume_markdown_template = """
 Act as an HR expert and resume writer specializing in ATS-friendly resumes. Your task is twofold:
 
@@ -475,6 +493,7 @@ Question: how much years experience with swift?
 {question}
 
 ## """
+
 
 options_template = """The following is a resume and an answered question about the resume, the answer is one of the options.
 

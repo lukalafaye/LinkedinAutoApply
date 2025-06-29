@@ -1,131 +1,165 @@
+"""
+LinkedIn Easy Apply Bot - Application Form Handler
+
+This module contains the core application form handling logic for the LinkedIn Easy Apply bot.
+It manages the multi-step application process, form field detection and filling, file uploads,
+and interaction with AI services for intelligent form completion.
+
+Key Features:
+- Multi-step form navigation and completion
+- AI-powered question answering with persistent memory
+- Automatic file upload handling (resume, cover letters)
+- Error detection and recovery
+- Support for various LinkedIn form element types (radio, dropdown, text, date, etc.)
+
+Classes:
+    LinkedInEasyApplier: Main class that handles the entire Easy Apply form submission process
+
+Dependencies:
+    - Selenium WebDriver for browser automation
+    - OpenAI/GPT integration for intelligent responses
+    - ReportLab for PDF generation
+    - Various utility functions for browser interaction
+"""
+
 import base64
+import io
 import os
 import random
 import tempfile
 import time
 import traceback
-from datetime import date
-from typing import List, Optional, Any, Tuple
 import uuid
+import warnings
+from datetime import date
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from langchain_core._api.deprecation import LangChainDeprecationWarning
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-import io
-import time
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from xhtml2pdf import pisa
-from typing import Dict
-from pathlib import Path
 
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.remote.webelement import WebElement
+import utils
+from logging_config import logger
 
-import warnings
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
-
-
-# put these near the top of the file, after the selenium imports
-from httpcore import TimeoutException as HttpTimeout   # keep if you still need it
-from selenium.common.exceptions import TimeoutException
-
-
-import utils    
+warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)    
 
 class LinkedInEasyApplier:
-    # def __init__(self, driver: Any, resume_dir: Optional[str], set_old_answers: List[Tuple[str, str, str]], gpt_answerer: Any):
-
-    #     if resume_dir and Path(resume_dir).exists():
-    #         resume_dir = Path(resume_dir)
-    #     else:
-    #         resume_dir = None
-
-    #     self.driver = driver
-    #     self.resume_dir = resume_dir
-    #     self.set_old_answers = set_old_answers
-    #     self.gpt_answerer = gpt_answerer
-
-    #     # Build a quick lookup dict for saved answers
-    #     # key: lowercase question substring → value: normalized answer ("Yes", "No", or other)
-    #     self.answers: Dict[str, str] = {}
-
-    #     for qtype, qsubstr, ans in set_old_answers:
-    #         key = qsubstr.lower().strip()
-    #         self.answers[key] = ans.title()
-
-    #     print(f"[DEBUG __init__] Loaded saved answers: {self.answers}")
-
-    # ---------------------------------------------------------------------------
-    # REPLACE the whole __init__
-    # ---------------------------------------------------------------------------
+    """
+    LinkedIn Easy Apply Form Handler
+    
+    This class manages the automated completion of LinkedIn Easy Apply forms.
+    It handles multi-step application processes, form field detection and filling,
+    file uploads, and integrates with AI services for intelligent form completion.
+    
+    The class maintains a persistent memory of answers to avoid repeatedly asking
+    the same questions and provides fallback strategies for various form scenarios.
+    
+    Attributes:
+        driver: Selenium WebDriver instance for browser automation
+        resume_dir: Path to resume file for upload
+        set_old_answers: List of previously answered questions for reuse
+        gpt_answerer: AI service for generating responses to form questions
+        answers: Dictionary mapping question substrings to saved answers
+    """
+    
     def __init__(
         self,
         driver: Any,
         resume_dir: Optional[str],
-        set_old_answers: list[tuple[str, str, str]],
+        set_old_answers: List[Tuple[str, str, str]],
         gpt_answerer: Any,
-        record_answer_cb: Optional[callable] = None,        # ← NEW
+        record_answer_cb: Optional[callable] = None,
     ):
-        self.driver          = driver
-        self.resume_dir      = Path(resume_dir) if resume_dir else None
-        self.set_old_answers = list(set_old_answers)        # mutable copy
-        self.gpt_answerer    = gpt_answerer
-        self._record_cb      = record_answer_cb             # ← NEW
+        """
+        Initialize the LinkedIn Easy Apply form handler.
+        
+        Args:
+            driver: Selenium WebDriver instance
+            resume_dir: Path to resume file for upload
+            set_old_answers: List of tuples (question_type, question_text, answer)
+            gpt_answerer: AI service for generating form responses
+            record_answer_cb: Optional callback to persist new answers
+        """
+        self.driver = driver
+        self.resume_dir = Path(resume_dir) if resume_dir else None
+        self.set_old_answers = list(set_old_answers)
+        self.gpt_answerer = gpt_answerer
+        self._record_cb = record_answer_cb
 
-
-        self.set_old_answers: list[tuple[str, str, str]] = []
+        # Normalize saved answers for quick lookup
+        self.set_old_answers: List[Tuple[str, str, str]] = []
         for entry in set_old_answers:
-            if len(entry) == 3:                       # OK already
+            if len(entry) == 3:
                 self.set_old_answers.append(entry)
-            elif len(entry) == 2:                     # ((type, substr), ans)
+            elif len(entry) == 2:
                 (q_type, q_substr), ans = entry
                 self.set_old_answers.append((q_type, q_substr, ans))
             else:
-                continue                              # ignore malformed rows
-            
-        #   t lookup of known answers
+                continue
+
+        # Build quick lookup dictionary for saved answers
         self.answers: Dict[str, str] = {
             q_sub.lower().strip(): ans.title()
             for _, q_sub, ans in self.set_old_answers
         }
-        print(f"[DEBUG __init__] Loaded saved answers: {self.answers}")
+        logger.debug(f"Loaded saved answers: {self.answers}")
 
-    # ---------------------------------------------------------------------------
-    # NEW helper – add anywhere inside the class
-    # ---------------------------------------------------------------------------
     def _remember_answer(self, qtype: str, qtext: str, answer: str) -> None:
-        """Persist a brand-new GPT answer both in-memory and on disk."""
+        """
+        Persist a new GPT-generated answer both in-memory and on disk.
+        
+        Args:
+            qtype: Type of question (radio, text, dropdown, etc.)
+            qtext: The question text
+            answer: The generated answer
+        """
         key = (qtype.lower(), qtext.lower())
         if any((t.lower(), q.lower()) == key for t, q, _ in self.set_old_answers):
             return
+            
         self.set_old_answers.append((qtype, qtext, answer))
         self.answers[qtext.lower()] = answer
+        
         if self._record_cb:
             try:
                 self._record_cb(qtype, qtext, answer)
             except Exception as exc:
-                print(f"[WARN] could not persist answer: {exc}")
-
-
+                logger.warning(f"Could not persist answer: {exc}")
 
     def _ask_openai_for_yes_no(self, prompt: str) -> str:
-        # Ensure the model replies only 'Yes' or 'No'
-        full_prompt = prompt + "\nAnswer only Yes or No."  
+        """
+        Get a Yes/No answer from the AI service.
+        
+        Args:
+            prompt: The question to ask
+            
+        Returns:
+            "Yes" or "No" response from AI
+        """
+        full_prompt = prompt + "\nAnswer only Yes or No."
         resp = self.gpt_answerer.openai_client.complete(prompt=full_prompt)
-        # Take the first word (should be Yes or No)
-        print(f"[DEBUG _ask_openai_for_yes_no] Got response: {resp}")
+        logger.debug(f"OpenAI yes/no response: {resp}")
         return resp.strip().split()[0].title()
 
     def _get_answer_from_set(self, question_type: str, question_text: str, options: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Look up a saved answer for the given question.
+        
+        Args:
+            question_type: Type of question (radio, text, dropdown, etc.)
+            question_text: The question text to search for
+            options: Optional list of valid options for validation
+            
+        Returns:
+            Saved answer if found and valid, None otherwise
+        """
         for entry in self.set_old_answers:
             if isinstance(entry, tuple) and len(entry) == 3:
                 if entry[0] == question_type and question_text in entry[1].lower():
@@ -134,27 +168,45 @@ class LinkedInEasyApplier:
         return None
 
     def _safe_click(self, el: WebElement):
-        # defocus any open search input
+        """
+        Safely click an element by defocusing, scrolling into view, and using JS click.
+        
+        Args:
+            el: WebElement to click
+        """
+        # Defocus any open search input
         self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         time.sleep(0.2)
 
-        # scroll it into view
+        # Scroll element into view
         self.driver.execute_script(
             "arguments[0].scrollIntoView({block: 'center', inline: 'center'});", el
         )
         time.sleep(0.2)
 
-        # click via JS to avoid interception
+        # Use JS click to avoid interception
         self.driver.execute_script("arguments[0].click();", el)
         time.sleep(0.5)
 
     def job_apply(self, job: Any):
+        """
+        Main entry point for applying to a LinkedIn job.
+        
+        Navigates to the job page, finds the Easy Apply button, extracts job description,
+        and handles the complete application form submission process.
+        
+        Args:
+            job: Job object containing job details and URL
+            
+        Raises:
+            Exception: If application process fails at any step
+        """
         self.driver.get(job.link)
-        # time.sleep(random.uniform(1.3, 2.5))
+        
         try:
             easy_apply_button = self._find_easy_apply_button()
             job_description = self._get_job_description()
-            print(f"\n––––– JOB DESCRIPTION for {job.title} –––––\n{job_description}\n–––– end description ––––\n")
+            logger.info(f"\n––––– JOB DESCRIPTION for {job.title} –––––\n{job_description}\n–––– end description ––––\n")
             job.set_job_description(job_description)
             self._safe_click(easy_apply_button)
             self.gpt_answerer.set_job(job)
@@ -165,30 +217,47 @@ class LinkedInEasyApplier:
             raise Exception(f"Failed to apply to job! Original exception: \nTraceback:\n{tb_str}")
 
     def _stable_key(self, form_el: WebElement) -> str:
-        """Return a hashable id for a LinkedIn form element that survives DOM recycling."""
+        """
+        Generate a stable identifier for a form element that survives DOM recycling.
+        
+        Args:
+            form_el: WebElement to generate key for
+            
+        Returns:
+            Unique string identifier for the element
+        """
         try:
             label = form_el.find_element(By.TAG_NAME, "label")
             return label.get_attribute("for") or label.text.strip()
         except NoSuchElementException:
-            return form_el.get_attribute("outerHTML")[:120]   # fallback
-
+            return form_el.get_attribute("outerHTML")[:120]
 
     def _find_easy_apply_button(self) -> WebElement:
+        """
+        Locate and return the clickable Easy Apply button on the job page.
+        
+        Returns:
+            WebElement of the Easy Apply button
+            
+        Raises:
+            Exception: If no clickable Easy Apply button is found
+        """
         buttons = WebDriverWait(self.driver, 5).until(
             EC.presence_of_all_elements_located(
                 (By.XPATH, '//button[contains(@class, "jobs-apply-button") and contains(., "Easy Apply")]')
             )
         )
+        
         for index, button in enumerate(buttons):
             try:
-                
                 return WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable(
                         (By.XPATH, f'(//button[contains(@class, "jobs-apply-button") and contains(., "Easy Apply")])[{index + 1}]')
                     )
                 )
-            except Exception as e:
+            except Exception:
                 pass
+                
         raise Exception("No clickable 'Easy Apply' button found")
 
     def _get_job_description(self) -> str:
@@ -202,7 +271,7 @@ class LinkedInEasyApplier:
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.jobs-description, #job-details, article.jobs-description__container"))
             )
         except TimeoutException:
-            utils.printred("[easy_applier] timed out waiting for description container")
+            logger.error("Timed out waiting for description container")
 
         # 2) Expand any "show more" button if present
         try:
@@ -232,7 +301,7 @@ class LinkedInEasyApplier:
             )
             return container.text.strip()
         except TimeoutException:
-            utils.printred("[easy_applier] article-based selector timed out")
+            logger.error("Article-based selector timed out")
 
         # 5) Fallback to the “stretch” class
         try:
@@ -252,12 +321,18 @@ class LinkedInEasyApplier:
             )
             return wrapper.text.strip()
         except Exception:
-            utils.printred(f"[easy_applier] could not locate job description:\n{traceback.format_exc()}")
+            logger.error(f"Could not locate job description:\n{traceback.format_exc()}")
             return ""
 
 
     def _auto_scroll_within_modal(self, root: WebElement):
-        # find the first ancestor that scrolls
+        """
+        Scroll within a modal to reveal dynamically loaded content.
+        
+        Args:
+            root: Root element to find scrollable container within
+        """
+        # Find the first ancestor that scrolls
         scroller = root
         while scroller and self.driver.execute_script(
             "return arguments[0].scrollHeight <= arguments[0].clientHeight",
@@ -268,30 +343,29 @@ class LinkedInEasyApplier:
         last = -1
         while True:
             self.driver.execute_script("arguments[0].scrollBy(0, 600);", scroller)
-            time.sleep(0.4)                     # allow virtualised list to render
+            time.sleep(0.4)  # Allow virtualized list to render
             now = self.driver.execute_script("return arguments[0].scrollTop;", scroller)
-            if now == last:                     # bottom reached
+            if now == last:  # Bottom reached
                 break
             last = now
 
-
     def _scroll_page(self) -> None:
+        """Scroll the entire page up and down to trigger content loading."""
         scrollable_element = self.driver.find_element(By.TAG_NAME, 'html')
         utils.scroll_slow(self.driver, scrollable_element, step=300, reverse=False)
         utils.scroll_slow(self.driver, scrollable_element, step=300, reverse=True)
 
     def _fill_application_form(self) -> None:
         """
-        Repeatedly
-        1️⃣  scan the *current* form,
-        2️⃣  answer / upload everything,
-        3️⃣  hit Next / Review / Submit,
-        until the Easy-Apply modal disappears.
+        Navigate through multi-step Easy Apply form until completion.
+        
+        Repeatedly scans the current form step, answers all fields,
+        and advances to the next step until the application is submitted.
         """
         step = 0
         while True:
             step += 1
-            print(f"[EASY-APPLY] ===== Step {step} =====")
+            logger.info(f"EASY-APPLY Step {step}")
 
             # --- 1️⃣  locate the *fresh* form for THIS step
             try:
@@ -300,15 +374,14 @@ class LinkedInEasyApplier:
                 )
 
                 html = form.get_attribute("outerHTML")
-                print("[DEBUG step-html-start] ===============================")
-                print(html[:5000] + (" …" if len(html) > 5000 else ""))
-                print("[DEBUG step-html-end] ===============================")
+                logger.debug("Step HTML content:")
+                logger.debug(html[:5000] + (" …" if len(html) > 5000 else ""))
 
 
                 # --- 2️⃣  answer every field in this form
                 self._answer_visible_form(form)
             except TimeoutException:
-                print("[DEBUG] no <form> – assuming Review page")
+                logger.debug("No <form> element found - assuming Review page")
                 modal = self.driver.find_element(
                 By.CSS_SELECTOR, "div.jobs-easy-apply-modal__content")
                 self.driver.execute_script(
@@ -321,76 +394,13 @@ class LinkedInEasyApplier:
 
             # --- 3️⃣  click Next / Review / Submit
             if self._next_or_submit():            # ⇢ returns True only on final Submit
-                print("[EASY-APPLY] Application submitted ✔")
+                logger.info("Application submitted successfully ✔")
                 break                             # modal vanished; we’re done
 
 
-    # def _answer_visible_form(self, form_el: WebElement) -> None:
-    #     """
-    #     Scroll inside *form_el* and keep invoking `_process_form_element`
-    #     **until no NEW elements are found in a full sweep**.
-    #     That guarantees that “lazy” questions which appear only after the
-    #     previous ones are answered are still handled in this step.
-    #     """
 
-    #     processed: set[str] = set()
-    #     pass_idx              = 0
-
-    #     while True:                       # ⟳ repeat full sweeps until stable
-    #         pass_idx += 1
-    #         newly_handled = 0
-    #         elems = form_el.find_elements(By.CSS_SELECTOR,
-    #                                       "[data-test-form-element]")
-
-    #         for el in elems:
-    #             key = self._stable_key(el)
-    #             if key in processed:
-    #                 continue
-
-    #             handled = self._process_form_element(el)
-    #             if handled:
-    #                 processed.add(key)
-    #                 newly_handled += 1
-
-    #         print(f"[DEBUG sweep {pass_idx}] handled {newly_handled} "
-    #               f"of {len(elems)} candidate blocks (total so far "
-    #               f"{len(processed)})")
-
-
-    #         # If this sweep did not touch anything new, we’re done
-    #         if newly_handled == 0:
-    #             break
-
-    #         # else: new controls may have appeared → scroll again & rescan
     #         self.driver.execute_script(
     #             "arguments[0].scrollBy(0, 600);", form_el)
-    #         time.sleep(0.4)
-
-    #     self._check_for_errors()          # final sanity-check
-    
-    #     time.sleep(0.2)
-
-    #     modal = self.driver.find_element(
-    #     By.CSS_SELECTOR, "div.jobs-easy-apply-modal__content")
-    #     self.driver.execute_script(
-    #         "arguments[0].scrollTo(0, arguments[0].scrollHeight);", modal)
-    #     time.sleep(0.6)           # give LI a moment to repaint the footer
-
-    #     # ---- blur so LI unlocks the primary button ---------------------------
-    #     try:                                   # ① active element first
-    #         self.driver.switch_to.active_element.send_keys(Keys.TAB)
-    #     except Exception:
-    #         pass                               # ignore if nothing is focussed
-
-    #     try:                                   # ② otherwise poke the <body>
-    #         self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.TAB)
-    #     except Exception:
-    #         pass
-    #     # ----------------------------------------------------------------------
-
-    #     time.sleep(0.2)                  # give LI time to validate
-
-
     def _answer_visible_form(self, form_el: WebElement) -> None:
         """
         Scroll inside *form_el* and keep invoking `_process_form_element`
@@ -429,7 +439,7 @@ class LinkedInEasyApplier:
                     newly_handled += 1
             # ----------------------------------------------------------------
 
-            print(f"[DEBUG sweep {pass_idx}] handled {newly_handled} of "
+            logger.debug(f"Form processing pass {pass_idx}: handled {newly_handled} of "
                 f"{len(elems)} + uploads (total so far {len(processed)})")
 
             if newly_handled == 0:
@@ -454,51 +464,64 @@ class LinkedInEasyApplier:
         time.sleep(0.2)
 
 
-    # utils.py  (or inside the class, up to you)
-    def _deep_label_text(self,
-                        root: WebElement,
-                        max_depth: int = 12) -> str:
+    def _deep_label_text(self, root: WebElement, max_depth: int = 12) -> str:
         """
-        Breadth-first search for the first non-empty <label> inside *root*.
-        Returns '' if none is found within *max_depth* levels.
+        Find the first non-empty label text within a form element using breadth-first search.
+        
+        This method traverses the DOM tree starting from the root element to find
+        label text that describes the form element. This is essential for understanding
+        what question is being asked in LinkedIn's dynamic form structure.
+        
+        Args:
+            root: Root WebElement to search within
+            max_depth: Maximum depth to search in the DOM tree
+            
+        Returns:
+            Label text if found, empty string otherwise
         """
-        queue: list[tuple[WebElement, int]] = [(root, 0)]      # (node, depth)
+        queue: list[tuple[WebElement, int]] = [(root, 0)]
 
         while queue:
             node, depth = queue.pop(0)
             if depth > max_depth:
                 break
 
-            # any <label> right here?
+            # Search for label elements at current level
             for lbl in node.find_elements(By.TAG_NAME, "label"):
                 txt = lbl.text.strip()
                 if txt:
                     return txt
 
-            # enqueue children for the next level
+            # Add children to queue for next level
             for child in node.find_elements(By.XPATH, "./*"):
                 queue.append((child, depth + 1))
 
         return ""
 
-
     def _process_form_element(self, element: WebElement) -> bool:
         """
-        Detect and handle every control that lives inside *element*.
-        Returns True if we filled / clicked **anything** in this element.
+        Detect and handle form controls within a LinkedIn form element.
+        
+        This is the main dispatcher that identifies what type of form element
+        we're dealing with and delegates to the appropriate handler. It can
+        handle multiple control types within a single element.
+        
+        Args:
+            element: WebElement containing form controls
+            
+        Returns:
+            True if any controls were successfully handled, False otherwise
         """
         handled = False
 
-        # ── uploads ────────────────────────────────────────────────────────────
+        # Handle file uploads first
         if self._is_upload_field(element):
-            print("[DEBUG _process_form_element] Detected upload field")
+            logger.debug("Detected upload field")
             self._handle_upload_fields(element)
-            handled = True             # no other controls expected, but keep going just in case
+            handled = True
 
-        # ── simple check-box for TOS / privacy tick boxes ─────────────────────
+        # Handle different form control types
         handled |= self._handle_terms_of_service(element)
-
-        # ── input types (may coexist in one block) ────────────────────────────
         handled |= self._handle_multiline_question(element)
         handled |= self._handle_radio_question(element)
         handled |= self._handle_dropdown_question(element)
@@ -506,21 +529,28 @@ class LinkedInEasyApplier:
         handled |= self._handle_date_question(element)
 
         if handled:
-            print("[DEBUG _process_form_element] Handled at least one sub-control")
+            logger.debug("Handled at least one sub-control")
         else:
-            print("[DEBUG _process_form_element] No handler matched. HTML snippet:")
-            print(element.get_attribute("outerHTML")[:500], "…")
+            logger.debug("No handler matched. HTML snippet:")
+            logger.debug(element.get_attribute("outerHTML")[:500] + "…")
 
         return handled
 
-
     def _get_primary_action_button(self) -> WebElement:
         """
-        Return the first visible & enabled Easy-Apply primary button
-        (Next ▸ Review ▸ Submit).  Now scrolls the modal footer into view
-        so the button becomes interactable on the Review step.
+        Locate and return the primary action button for the Easy Apply modal.
+        
+        This method finds the Next/Review/Submit button that advances the application
+        process. It handles LinkedIn's dynamic button states and ensures the button
+        is scrolled into view and clickable.
+        
+        Returns:
+            WebElement of the primary action button
+            
+        Raises:
+            TimeoutException: If no clickable primary button is found
         """
-        # ------------------------------------------------------------- NEW ----
+        # Ensure footer is located first
         footer = WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located(
                 (By.CSS_SELECTOR, "div.jobs-easy-apply-modal footer"))
@@ -562,12 +592,10 @@ class LinkedInEasyApplier:
             )
 
             # ③ wait until it’s actually clickable (enabled & no overlay)
-            # DEBUG ───────────────────────────────────────────────────────────
-            print("[BTN] candidate:",
-            btn.text, "| disabled:",
-            btn.get_attribute("disabled"),
-            "| aria-disabled:", btn.get_attribute("aria-disabled"),
-            "| classes:", btn.get_attribute("class"))
+            # Debug button information
+            logger.debug(f"Button candidate: {btn.text} | disabled: {btn.get_attribute('disabled')} | "
+                        f"aria-disabled: {btn.get_attribute('aria-disabled')} | "
+                        f"classes: {btn.get_attribute('class')}")
 
             try:
                 WebDriverWait(self.driver, 6).until(
@@ -576,7 +604,7 @@ class LinkedInEasyApplier:
                 return btn                    # success!
             except TimeoutException:
                 if btn.is_displayed():
-                    print("[BTN] forcing JS click on primary CTA")
+                    logger.debug("Forcing JS click on primary CTA")
                     return btn   
                 continue
                 # try next locator
@@ -597,7 +625,7 @@ class LinkedInEasyApplier:
         if 'submit' in label.lower():
             self._unfollow_company()
         self._safe_click(btn)
-        print(f"[NEXT] Clicked '{label}'")
+        logger.info(f"Clicked button: '{label}'")
 
         # Wait for either the modal to vanish OR a fresh primary button to render.
         try:
@@ -623,29 +651,7 @@ class LinkedInEasyApplier:
         except NoSuchElementException:
             return True    # modal closed     → job applied!
 
-    # def _next_or_submit(self):
-    #     next_btn = self.driver.find_element(By.CLASS_NAME, "artdeco-button--primary")
-    #     next_btn.click()
-    #     time.sleep(1.2)
 
-    #     try:
-    #         self._check_for_errors()
-    #         return False                        # moved on to the next step
-    #     except Exception as exc:
-    #         msg = str(exc).lower()
-    #         if "please make a selection" in msg:
-    #             # find every visible error, click the first available option
-    #             for err in self.driver.find_elements(By.CLASS_NAME,
-    #                                                 "artdeco-inline-feedback--error"):
-    #                 if not err.is_displayed():          # ignore inactive errors
-    #                     continue
-    #                 block = err.find_element(By.XPATH,
-    #                         "./ancestor::*[@data-test-form-element][1]")
-    #                 self._handle_radio_question(block) or \
-    #                 self._handle_dropdown_question(block)
-    #             # try the button again
-    #             return self._next_or_submit()
-    #         raise                                       # real error, bubble up
 
 
 
@@ -709,40 +715,7 @@ class LinkedInEasyApplier:
         except NoSuchElementException:
             return False
 
-    # def _handle_upload_fields(self, element: WebElement) -> None:
-    #     """Upload résumé / cover-letter for the current Easy-Apply step."""
-    #     try:
-    #         file_input = block.find_element(By.CSS_SELECTOR, "input[type='file']")
-    #     except NoSuchElementException:
-    #         return
 
-    #     # What kind of document is this block asking for?
-    #     input_id = file_input.get_attribute("id").lower()
-    #     is_cover = any(k in input_id for k in ("cover", "motivation"))
-    #     is_resume = not is_cover                       # default
-
-    #     try:
-    #         label = block.find_element(By.TAG_NAME, "label")
-    #         self._safe_click(label)
-    #     except NoSuchElementException:
-    #         pass
-
-    #     # 2️⃣  unhide the <input> so Selenium can interact with it
-    #     self.driver.execute_script(
-    #         "arguments[0].classList.remove('hidden');", file_input
-    #     )
-    #     time.sleep(0.3)
-
-    #     if resume_dir and Path(resume_dir).exists():
-    #         self.resume_dir = Path(resume_dir)
-    #     else:
-    #         self.resume_dir = None
-
-    #     # 3️⃣  send the file
-    #     if is_resume and self.resume_dir:
-    #         file_input.send_keys(str(self.resume_dir.resolve()))
-    #     elif is_cover:
-    #         self._create_and_upload_cover_letter(file_input)
 
 
     def _handle_upload_fields(self, block: WebElement) -> bool:
@@ -798,29 +771,49 @@ class LinkedInEasyApplier:
 
         return True
 
-    def _create_and_upload_resume(self, element):
+    def _create_and_upload_resume(self, element: WebElement) -> bool:
+        """
+        Create and upload a dynamically generated resume PDF.
+        
+        This method is currently disabled as it generates resumes on-the-fly.
+        The implementation can be enabled if needed for specific use cases.
+        
+        Args:
+            element: The file input element to upload to
+            
+        Returns:
+            True if resume was successfully created and uploaded
+            
+        Raises:
+            Exception: If maximum retries are reached and upload fails
+        """
         max_retries = 3
         retry_delay = 1
         folder_path = 'generated_cv'
 
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
+            
         for attempt in range(max_retries):
             try:
+                # NOTE: Resume generation is currently disabled
+                # Uncomment and implement the following if dynamic resume generation is needed:
+                #
                 # html_string = self.gpt_answerer.get_resume_html()
                 # with tempfile.NamedTemporaryFile(delete=False, suffix='.html', mode='w', encoding='utf-8') as temp_html_file:
                 #     temp_html_file.write(html_string)
                 #     file_name_HTML = temp_html_file.name
-
+                #
                 # file_name_pdf = f"resume_{uuid.uuid4().hex}.pdf"
                 # file_path_pdf = os.path.join(folder_path, file_name_pdf)
-                
+                # 
                 # with open(file_path_pdf, "wb") as f:
                 #     f.write(base64.b64decode(utils.HTML_to_PDF(file_name_HTML)))
-                    
+                #     
                 # element.send_keys(os.path.abspath(file_path_pdf))
                 # time.sleep(2)  # Give some time for the upload process
                 # os.remove(file_name_HTML)
+                
                 return True
             except Exception:
                 if attempt < max_retries - 1:
@@ -830,9 +823,24 @@ class LinkedInEasyApplier:
                     raise Exception(f"Max retries reached. Upload failed: \nTraceback:\n{tb_str}")
 
     def _upload_resume(self, element: WebElement) -> None:
+        """
+        Upload the configured resume file to the given file input element.
+        
+        Args:
+            element: The file input element to upload the resume to
+        """
         element.send_keys(str(self.resume_dir))
 
     def _create_and_upload_cover_letter(self, element: WebElement) -> None:
+        """
+        Generate and upload a cover letter PDF using AI.
+        
+        Creates a temporary PDF file containing an AI-generated cover letter
+        and uploads it to the specified file input element.
+        
+        Args:
+            element: The file input element to upload the cover letter to
+        """
         cover_letter = self.gpt_answerer.answer_question_textual_wide_range("Write a cover letter")
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf_file:
             letter_path = temp_pdf_file.name
@@ -846,11 +854,25 @@ class LinkedInEasyApplier:
             element.send_keys(letter_path)
 
     def _fill_additional_questions(self) -> None:
+        """
+        Process additional questions in the Easy Apply form.
+        
+        Finds and processes form sections that contain additional questions
+        beyond the basic application information.
+        """
         form_sections = self.driver.find_elements(By.CLASS_NAME, 'jobs-easy-apply-form-section__grouping')
         for section in form_sections:
             self._process_question(section)
 
     def _process_question(self, section: WebElement) -> None:
+        """
+        Process a single question section in the application form.
+        
+        Delegates to specific handlers based on the type of form element found.
+        
+        Args:
+            section: WebElement containing the question to process
+        """
         if self._handle_terms_of_service(section):
             return
         self._handle_radio_question(section)
@@ -859,6 +881,18 @@ class LinkedInEasyApplier:
         self._handle_dropdown_question(section)
 
     def _handle_terms_of_service(self, element: WebElement) -> bool:
+        """
+        Handle terms of service, privacy policy, and similar checkboxes.
+        
+        Automatically accepts terms and conditions checkboxes by detecting
+        common keywords in multiple languages.
+        
+        Args:
+            element: WebElement containing the checkbox
+            
+        Returns:
+            True if a terms checkbox was found and clicked, False otherwise
+        """
         try:
             checkbox = element.find_element(By.TAG_NAME, 'label')
             question_text = checkbox.text.lower()
@@ -872,84 +906,6 @@ class LinkedInEasyApplier:
         except NoSuchElementException:
             return False
 
-    # def _handle_radio_question(self, element: WebElement) -> bool:
-    #     """
-    #     Handles both:
-    #     - simple <legend> + <label> radio groups
-    #     - the new LinkedIn multipleChoice fieldset pattern
-    #     Returns True if we clicked something, False otherwise.
-    #     """
-    #     try:
-    #         # 1) Find the question text
-    #         #    Either from a <legend> or fallback to a <label> title
-    #         # ⓐ  If there aren’t any radio inputs here, it’s not a radio question.
-    #         if not element.find_elements(By.CSS_SELECTOR, "input[type=radio]"):
-    #             return False
-
-    #         try:
-    #             legend = element.find_element(By.TAG_NAME, "legend")
-    #             question_text = legend.text.strip()
-    #         except NoSuchElementException:
-    #             # some patterns only have a label as the title
-    #             label_title = element.find_element(By.CSS_SELECTOR, "[data-test-text-entity-list-form-title], .fb-dash-form-element__label-title--is-required")
-    #             question_text = label_title.text.strip()
-
-    #         # 2) Collect all option labels
-    #         labels = element.find_elements(By.TAG_NAME, "label")
-    #         if not labels:
-    #             return False
-
-    #         # 3) Skip if already answered (any checked input)                
-    #         checked = element.find_elements(By.CSS_SELECTOR, "input[type=radio]:checked")
-    #         print(f"[RADIO-CHK] now_checked={len(checked)}")
-
-    #         if checked:
-    #             return True
-
-    #         # 4) Build the list of option texts
-    #         options = [lbl.text.strip() for lbl in labels if lbl.text.strip()]
-    #         if not options:
-    #             return False
-
-    #         # 5) Lookup saved answer or ask GPT to pick one of these options
-    #         key = question_text.lower()
-    #         answer = None
-    #         # try saved
-    #         for substr, ans in self.answers.items():
-    #             if substr in key:
-    #                 if ans in options:
-    #                     answer = ans
-    #                     break
-    #         # fallback GPT
-    #         if not answer:
-    #             answer = self.gpt_answerer.answer_question_from_options(question_text, options)
-    #         answer = answer.strip()
-
-    #         # 6) Click the matching label (or fallback to first)
-    #         print(f"[RADIO] Q: {question_text!r}  →  chosen: {answer!r}")
-
-    #         for lbl in labels:
-    #             if lbl.text.strip().lower() == answer.lower():
-    #                 self._safe_click(lbl)
-    #                 time.sleep(0.3)
-    #                 return True
-
-    #         # fallback
-    #         self._safe_click(labels[0])
-    #         time.sleep(0.3)
-    #         return True
-
-    #     except NoSuchElementException:
-    #         return False
-    #     except Exception as e:
-    #         print(f"[handle_radio_question] unexpected error: {e}")
-    #         print(f"[RADIO-EXC] {exc}")
-    #         return False
-
-
-    # ---------------------------------------------------------------------------
-    # REPLACE the whole _handle_radio_question
-    # ---------------------------------------------------------------------------
     def _handle_radio_question(self, element: WebElement) -> bool:
         """
         Answer LinkedIn radio-group questions, reusing saved answers whenever
@@ -990,7 +946,7 @@ class LinkedInEasyApplier:
                 answer     = self.gpt_answerer.answer_question_from_options(question_text, options).strip()
                 generated  = True
 
-            print(f"[RADIO] Q: {question_text!r} → chosen: {answer!r}")
+            logger.debug(f"RADIO Q: {question_text!r} → chosen: {answer!r}")
 
             for lbl in labels:
                 if lbl.text.strip().lower() == answer.lower():
@@ -1040,7 +996,7 @@ class LinkedInEasyApplier:
         except NoSuchElementException:
             return False
         except Exception as exc:
-            print(f"[MULTILINE-EXC] {exc}")
+            logger.error(f"MULTILINE exception: {exc}")
             return False
 
 
@@ -1109,7 +1065,7 @@ class LinkedInEasyApplier:
         if not answer.strip():
             answer = "0" if is_numeric else "N/A"
 
-        print(f"[TEXTBOX] Q: {question_text!r} → {answer!r}")
+        logger.debug(f"TEXTBOX Q: {question_text!r} → {answer!r}")
         text_field.clear()
         text_field.send_keys(answer)
         text_field.send_keys(Keys.TAB)
@@ -1122,101 +1078,18 @@ class LinkedInEasyApplier:
 
 
 
-    # def _handle_textbox_question(self, element: WebElement) -> bool:
-    #     """Handle LI single-line text or numeric fields. Return True if touched."""
-
-    #     # ── 0. is there an <input>/<textarea> at all? ────────────────────────────
-    #     if (not element.find_elements(By.TAG_NAME, "input") and
-    #         not element.find_elements(By.TAG_NAME, "textarea")):
-    #         return False            # let other handlers try
-
-    #     # ── 1. find the question text ────────────────────────────────────────────
-    #     try:
-    #         question_text = self._deep_label_text(element).lower()
-    #     except NoSuchElementException:
-    #         return False            # not a textbox block
-
-    #     # ── 2. locate the visible input control ─────────────────────────────────
-    #     text_field = None
-    #     for inp in element.find_elements(By.TAG_NAME, "input"):
-    #         t = (inp.get_attribute("type") or "").lower()
-    #         if inp.is_displayed() and t not in ("hidden", "file"):
-    #             text_field = inp
-    #             break
-    #     if text_field is None:
-    #         for ta in element.find_elements(By.TAG_NAME, "textarea"):
-    #             if ta.is_displayed():
-    #                 text_field = ta
-    #                 break
-    #     if text_field is None:
-    #         return False
-
-    #     # ── 3. pre-filled value? just blur it so LI unlocks the CTA ─────────────
-    #     prefilled = text_field.get_attribute("value").strip()
-    #     if prefilled:
-    #         if text_field.is_enabled():
-    #             print(f"[TEXTBOX-PREFILLED] '{question_text[:60]}…' -> {prefilled!r}")
-    #             text_field.send_keys(Keys.TAB)
-    #             time.sleep(0.3)
-    #         return True             # ✅ handled (don’t exit early elsewhere!)
-
-    #     # ── 4. work out an answer (saved → heuristics → GPT)  ───────────────────
-    #     field_id   = text_field.get_attribute("id") or ""
-    #     is_numeric = "-numeric" in field_id
-
-    #     answer = self._get_answer_from_set("numeric" if is_numeric else "text",
-    #                                     question_text)
-
-    #     if not answer:
-    #         if   "legal first name"        in question_text: answer = "Luka"
-    #         elif "preferred first name"    in question_text: answer = "Luka"
-    #         elif "legal last name"         in question_text: answer = "Lafaye de Micheaux"
-    #         elif ("city" in question_text or "location" in question_text) and not is_numeric:
-    #             answer = "Paris"
-    #         elif any(k in question_text for k in (
-    #                 "mobile phone", "numéro de mobile", "numéro de téléphone",
-    #                 "téléphone portable", "phone number", "téléphone")):
-    #             answer = "+33786948497"
-    #         elif "linkedin profile"  in question_text:
-    #             answer = "https://www.linkedin.com/in/your-profile"
-    #         else:
-    #             raw = (self.gpt_answerer.answer_question_numeric(question_text)
-    #                 if is_numeric
-    #                 else self.gpt_answerer.answer_question_textual_wide_range(question_text))
-    #             answer = raw or ""
-
-    #     if is_numeric:
-    #         answer = self._clamp_numeric_answer(answer, 1, 99)
-
-    #     if not answer.strip():
-    #         answer = "0" if is_numeric else "N/A"
-
-    #     # ── 5. type the answer & blur ───────────────────────────────────────────
-    #     print(f"[TEXTBOX] Q: {question_text!r} → {answer!r}")
-    #     text_field.clear()
-    #     text_field.send_keys(answer)
-    #     text_field.send_keys(Keys.TAB)
-    #     time.sleep(0.5)
-
-    #     # ── 6. one retry if inline error appears ────────────────────────────────
-    #     try:
-    #         err = element.find_element(By.CLASS_NAME, "artdeco-inline-feedback--error")
-    #         if err.is_displayed():
-    #             fixed = self.gpt_answerer.try_fix_answer(
-    #                         question_text, answer, err.text.lower()) or answer
-    #             if is_numeric:
-    #                 fixed = self._clamp_numeric_answer(fixed, 1, 99)
-    #             print(f"[TEXTBOX-ERR] {err.text.strip()!r} -> retry {fixed!r}")
-    #             text_field.clear()
-    #             text_field.send_keys(fixed)
-    #             text_field.send_keys(Keys.TAB)
-    #             time.sleep(0.5)
-    #     except NoSuchElementException:
-    #         pass
-
-    #     return True
-
     def _handle_date_question(self, element: WebElement) -> bool:
+        """
+        Handle date picker form elements.
+        
+        Automatically fills date picker inputs with today's date if they are empty.
+        
+        Args:
+            element: WebElement containing the date picker
+            
+        Returns:
+            True if a date was filled, False if not a date picker or already filled
+        """
         try:
             date_picker = element.find_element(By.CLASS_NAME, 'artdeco-datepicker__input')
             if date_picker.get_attribute('value').strip():
@@ -1231,83 +1104,22 @@ class LinkedInEasyApplier:
         except NoSuchElementException:
             return False
         except Exception as e:
-            print(f"[handle_date_question] unexpected error: {e}")
+            logger.error(f"Date question handling error: {e}")
             return False
 
-    # def _handle_dropdown_question(self, element: WebElement) -> bool:
-    #     """
-    #     Handle a LinkedIn <select> control.
-
-    #     • If the control already contains a **user-confirmed** value
-    #     (dropdown disabled), we skip it.
-    #     • If LinkedIn pre-fills a value *but leaves the control enabled*
-    #     we must still trigger a change event, otherwise the primary
-    #     button stays disabled.
-    #     """
-    #     try:
-    #         question_text = element.find_element(By.TAG_NAME, "label").text.lower()
-    #         dropdown      = element.find_element(By.TAG_NAME, "select")
-    #         select        = Select(dropdown)
-    #         time.sleep(0.3)
-
-    #         # ── already answered? ──────────────────────────────────────
-    #         first = select.first_selected_option.text.strip().lower()
-
-    #         #  ↳ skip **only** when the control is truly frozen
-    #         if (
-    #             first                                        # something selected
-    #             and not any(tok in first for tok in          # not a placeholder
-    #                         ("select", "sélect", "choose",
-    #                         "choisissez"))
-    #             and not dropdown.is_enabled()                # user already confirmed
-    #         ):
-    #             return False
-
-    #         # ── choose an answer ───────────────────────────────────────
-    #         options = [o.text for o in select.options]
-
-    #         answer  = self._get_answer_from_set('dropdown',
-    #                                             question_text,
-    #                                             options)
-    #         if not answer:
-    #             placeholder = ("select", "sélect", "choose", "choisissez")
-    #             answer = next((o for o in options
-    #                         if not any(tok in o.lower() for tok in placeholder)),
-    #                         options[1])
-
-    #         print(f"[DROPDOWN] Q: {question_text!r}  →  selecting: {answer!r}")
-
-    #         self._select_dropdown(dropdown, answer)
-
-    #         # fire change / blur so LinkedIn enables the primary button
-    #         for evt in ("change", "blur"):
-    #             self.driver.execute_script(
-    #                 "arguments[0].dispatchEvent(new Event(arguments[1],"
-    #                 "{bubbles:true}));",
-    #                 dropdown, evt
-    #             )
-
-    #         # wait for inline error (if any) to clear
-    #         try:
-    #             WebDriverWait(self.driver, 3).until_not(
-    #                 lambda d: "error-field" in dropdown.get_attribute("class")
-    #             )
-    #         except TimeoutException:
-    #             pass
-
-    #         return True
-
-    #     except NoSuchElementException:
-    #         return False
-    #     except Exception as exc:
-    #         print(f"[DROPDOWN-EXC] {exc}")
-    #         return False
-
-        
-    # ---------------------------------------------------------------------------
-    # REPLACE the whole _handle_dropdown_question
-    # ---------------------------------------------------------------------------
     def _handle_dropdown_question(self, element: WebElement) -> bool:
+        """
+        Handle dropdown (select) form elements.
+        
+        Detects dropdown questions, checks if already answered, and selects
+        appropriate options using saved answers or AI-generated responses.
+        
+        Args:
+            element: WebElement containing the dropdown
+            
+        Returns:
+            True if a dropdown option was selected, False if not a dropdown or already answered
+        """
         try:
             question_text = element.find_element(By.TAG_NAME, "label").text.lower()
             dropdown      = element.find_element(By.TAG_NAME, "select")
@@ -1327,7 +1139,7 @@ class LinkedInEasyApplier:
                             options[1])
                 generated = True
 
-            print(f"[DROPDOWN] Q: {question_text!r} → selecting: {answer!r}")
+            logger.debug(f"DROPDOWN Q: {question_text!r} → selecting: {answer!r}")
             self._select_dropdown(dropdown, answer)
 
             for evt in ("change", "blur"):
@@ -1346,12 +1158,37 @@ class LinkedInEasyApplier:
 
 
     def _find_text_field(self, question: WebElement) -> WebElement:
+        """
+        Find the text input field within a question element.
+        
+        Tries to locate an input element first, falling back to textarea.
+        
+        Args:
+            question: WebElement containing the form question
+            
+        Returns:
+            The text input or textarea element
+            
+        Raises:
+            NoSuchElementException: If no text field is found
+        """
         try:
             return question.find_element(By.TAG_NAME, 'input')
         except NoSuchElementException:
             return question.find_element(By.TAG_NAME, 'textarea')
 
     def _is_numeric_field(self, field: WebElement) -> bool:
+        """
+        Determine if a field expects numeric input.
+        
+        Checks the field's type attribute and ID for numeric indicators.
+        
+        Args:
+            field: The input field to check
+            
+        Returns:
+            True if the field expects numeric input, False otherwise
+        """
         field_type = field.get_attribute('type').lower()
         if 'numeric' in field_type:
             return True
@@ -1359,6 +1196,16 @@ class LinkedInEasyApplier:
         return class_attribute and 'numeric' in class_attribute
 
     def _enter_text(self, element: WebElement, text: str) -> None:
+        """
+        Enter text into a form field with autocomplete handling.
+        
+        Clears the field, enters the text, and handles any autocomplete
+        dropdowns that may appear.
+        
+        Args:
+            element: The form field to enter text into
+            text: The text to enter
+        """
         element.clear()
         element.send_keys(text)
         time.sleep(0.5)  # Allow the dropdown to appear, if any
@@ -1377,8 +1224,16 @@ class LinkedInEasyApplier:
 
     def _select_dropdown(self, element: WebElement, text: str) -> None:
         """
-        Try exact match first, then   ⓑ contains-match, finally ⓒ pick the first
-        non-placeholder option so the form can advance.
+        Select an option from a dropdown element with intelligent matching.
+        
+        Uses multiple strategies to find the best match:
+        1. Exact text match
+        2. Case-insensitive substring match
+        3. Fallback to first non-placeholder option
+        
+        Args:
+            element: The select dropdown element
+            text: The text to search for in options
         """
         select = Select(element)
 
@@ -1404,6 +1259,16 @@ class LinkedInEasyApplier:
 
 
     def _select_radio(self, radios: List[WebElement], answer: str) -> None:
+        """
+        Select a radio button option based on text matching.
+        
+        Searches through radio button options for a match with the answer text.
+        Falls back to the last option if no match is found.
+        
+        Args:
+            radios: List of radio button elements
+            answer: The answer text to match against
+        """
         for radio in radios:
             if answer in radio.text.lower():
                 radio.find_element(By.TAG_NAME, 'label').click()
@@ -1411,6 +1276,17 @@ class LinkedInEasyApplier:
         radios[-1].find_element(By.TAG_NAME, 'label').click()
 
     def _handle_form_errors(self, element: WebElement, question_text: str, answer: str, text_field: WebElement) -> None:
+        """
+        Handle form validation errors by asking AI to fix the answer.
+        
+        Detects inline error messages and uses AI to generate a corrected response.
+        
+        Args:
+            element: The form element containing the error
+            question_text: The original question text
+            answer: The answer that caused the error
+            text_field: The text field to update with the corrected answer
+        """
         try:
             error = element.find_element(By.CLASS_NAME, 'artdeco-inline-feedback--error')
             error_text = error.text.lower()
