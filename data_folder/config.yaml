@@ -1,0 +1,45 @@
+remote: true
+
+experienceLevel:
+  internship: true
+  entry: true
+  associate: true
+  mid-senior level: false
+  director: false
+  executive: false
+
+jobTypes:
+  full-time: true
+  contract: false
+  part-time: false
+  temporary: true
+  internship: false
+  other: false
+  volunteer: false
+
+date:
+  all time: false
+  month: true
+  week: true
+  24 hours: true
+
+positions:
+  - AI
+  - Machine Learning
+  - Deep Learning
+
+locations:
+  - Europe
+
+distance: 100
+
+companyBlacklist:
+  - Horiana
+  - Arteris
+  - Arteris IP
+
+titleBlacklist:
+  - Business
+  - Consultant
+  - Data
+  - Data scientist
