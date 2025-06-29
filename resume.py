@@ -12,7 +12,6 @@ It provides structured data containers for different sections of a resume includ
 The Resume class serves as the main interface for loading, parsing, and accessing
 resume data from YAML files or plain text sources.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

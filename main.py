@@ -14,7 +14,6 @@ Features:
 Usage:
     python main.py [--resume path/to/resume.pdf]
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 
@@ -156,9 +155,10 @@ class ConfigValidator:
         Validate the secrets YAML file containing sensitive credentials.
         
         Validates email format, password presence, and OpenAI API key.
+        Uses fallback logic: tries secrets.yaml first, then secrets.example.yaml.
         
         Args:
-            secrets_yaml_path: Path to the secrets.yaml file
+            secrets_yaml_path: Path to the secrets file (secrets.yaml or secrets.example.yaml)
             
         Returns:
             tuple: (email, password, openai_api_key)
@@ -237,13 +237,19 @@ class FileManager:
         if not app_data_folder.exists() or not app_data_folder.is_dir():
             raise FileNotFoundError(f"Data folder not found: {app_data_folder}")
 
-        # Define required file paths
+        # Define required file paths with fallback for secrets
         secrets_file = app_data_folder / 'secrets.yaml'
+        if not secrets_file.exists():
+            secrets_file = app_data_folder / 'secrets.example.yaml'
+            logger.info("secrets.yaml not found, using secrets.example.yaml as fallback")
+            
         config_file = app_data_folder / 'config.yaml'
         plain_text_resume_file = app_data_folder / 'plain_text_resume.yaml'
         
         # Check for missing files
         missing_files = []
+        if not secrets_file.exists():
+            missing_files.append('secrets.yaml (or secrets.example.yaml)')
         if not config_file.exists():
             missing_files.append('config.yaml')
         if not plain_text_resume_file.exists():

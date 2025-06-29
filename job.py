@@ -7,7 +7,6 @@ about a LinkedIn job posting including metadata, description, and application st
 The Job class serves as a standardized data container that is passed between
 different components of the application system.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

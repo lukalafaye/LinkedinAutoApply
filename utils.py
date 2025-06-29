@@ -11,7 +11,6 @@ This module provides utility functions for the LinkedIn job application bot incl
 These utilities support the main application functionality with commonly needed
 operations and browser automation helpers.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

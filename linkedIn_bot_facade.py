@@ -8,7 +8,6 @@ resume handler, and GPT-powered question answering system.
 The facade pattern ensures proper component initialization order and provides a clean
 interface for starting the job application process.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

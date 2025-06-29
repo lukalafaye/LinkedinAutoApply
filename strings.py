@@ -11,7 +11,6 @@ throughout the LinkedIn job application bot. It includes templates for:
 These templates are designed to work with GPT models to generate high-quality,
 contextual responses for job applications.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

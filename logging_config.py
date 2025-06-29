@@ -4,7 +4,6 @@ Logging Configuration - Centralized Logging Setup
 This module provides a centralized logging configuration for the LinkedIn bot application.
 It sets up formatted console and file logging with appropriate levels and handlers.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 

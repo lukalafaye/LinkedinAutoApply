@@ -10,7 +10,6 @@ This module manages the authentication process for LinkedIn, including:
 The authenticator uses Selenium WebDriver to interact with LinkedIn's login interface
 and handles various authentication scenarios including 2FA challenges.
 
-Author: AI-Enhanced LinkedIn Job Application Bot
 Date: 2025
 """
 
