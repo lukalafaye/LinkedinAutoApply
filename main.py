@@ -190,6 +190,7 @@ def create_and_run_bot(email: str, password: str, parameters: dict, openai_api_k
         bot.set_gpt_answerer(gpt_answerer_component)
         bot.set_parameters(parameters)
         bot.start_login()
+        
         bot.start_apply()
     except Exception as e:
         raise RuntimeError(f"Error running the bot: {str(e)}")

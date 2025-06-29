@@ -1096,7 +1096,7 @@ class LinkedInEasyApplier:
                 answer = "+33786948497"
             elif "linkedin profile" in question_text:
                 answer = "https://www.linkedin.com/in/lukalafaye"
-            else:artdeco
+            else:
                 raw = (
                     self.gpt_answerer.answer_question_numeric(question_text)
                     if is_numeric
