@@ -1,0 +1,3 @@
+[submodule "resumy"]
+	path = resumy
+	url = https://github.com/lukalafaye/resumy
