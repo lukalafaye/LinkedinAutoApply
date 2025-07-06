@@ -12,13 +12,14 @@ import sys
 from pathlib import Path
 
 
-def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logger:
+def setup_logging(log_level: str = "INFO", log_file: str = None, verbose: bool = False) -> logging.Logger:
     """
     Set up logging configuration with console and optional file output.
     
     Args:
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_file: Optional path to log file
+        verbose: If True, console will show DEBUG messages; if False, only INFO and above
         
     Returns:
         logging.Logger: Configured logger instance
@@ -36,9 +37,10 @@ def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logg
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Console handler
+    # Console handler - level depends on verbose flag
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_level = logging.DEBUG if verbose else logging.INFO
+    console_handler.setLevel(console_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
@@ -53,6 +55,27 @@ def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logg
         logger.addHandler(file_handler)
     
     return logger
+
+
+def configure_verbose_logging(verbose: bool = False):
+    """
+    Reconfigure the existing logger to enable/disable verbose console output.
+    
+    Args:
+        verbose: If True, console will show DEBUG messages; if False, only INFO and above
+    """
+    global logger
+    
+    # Update the logger level to DEBUG if verbose is enabled
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+    
+    # Find the console handler and update its level
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+            console_level = logging.DEBUG if verbose else logging.INFO
+            handler.setLevel(console_level)
+            break
 
 
 # Create default logger instance

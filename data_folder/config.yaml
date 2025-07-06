@@ -43,3 +43,41 @@ titleBlacklist:
   - Consultant
   - Data
   - Data scientist
+
+# Bot-specific resume configuration
+resume_config:
+  personal_details:
+    date_of_birth: "23/10/2002"
+    pronouns: "He/Him"
+    gender: "Male"
+    veteran: false
+    disability: false
+    ethnicity: "European"
+  
+  legal_authorization:
+    eu_work_authorization: true
+    us_work_authorization: false
+    requires_us_visa: true
+    legally_allowed_to_work_in_us: false
+    requires_us_sponsorship: true
+    requires_eu_visa: false
+    legally_allowed_to_work_in_eu: true
+    requires_eu_sponsorship: false
+  
+  work_preferences:
+    remote_work: true
+    in_person_work: true
+    open_to_relocation: true
+    willing_to_complete_assessments: true
+    willing_to_undergo_drug_tests: true
+    willing_to_undergo_background_checks: true
+  
+  availability:
+    notice_period: "3 months"
+  
+  salary_expectations:
+    salary_range_usd: "90000"
+
+
+
+

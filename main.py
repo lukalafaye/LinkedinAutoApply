@@ -62,8 +62,16 @@ class ConfigValidator:
         Returns:
             bool: True if email format is valid, False otherwise
         """
+        # Check for basic email format and reject emails with consecutive dots
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        return re.match(email_regex, email) is not None
+        if not re.match(email_regex, email):
+            return False
+        
+        # Reject emails with consecutive dots (like test..test@domain.com)
+        if '..' in email:
+            return False
+            
+        return True
     
     @staticmethod
     def validate_config(config_yaml_path: Path) -> dict:
@@ -221,15 +229,36 @@ class FileManager:
         return None
 
     @staticmethod
+    def find_file_by_name(name_containing: str, with_extension: str, at_path: Path) -> Path:
+        """
+        Find a file by name pattern and extension in a directory.
+        
+        Args:
+            name_containing: String that should be contained in the filename
+            with_extension: File extension to match (e.g., '.pdf')
+            at_path: Directory path to search in
+            
+        Returns:
+            Path: Path to the found file, or None if not found
+        """
+        for file in at_path.iterdir():
+            if name_containing.lower() in file.name.lower() and file.suffix.lower() == with_extension.lower():
+                return file
+        return None
+
+    @staticmethod
     def validate_data_folder(app_data_folder: Path) -> tuple:
         """
         Validate that the data folder exists and contains required files.
+        
+        Supports both new resume format (resume.yaml) and legacy format 
+        (plain_text_resume.yaml) for backward compatibility with tests.
         
         Args:
             app_data_folder: Path to the application data folder
             
         Returns:
-            tuple: (secrets_file, config_file, plain_text_resume_file, output_folder)
+            tuple: (secrets_file, config_file, resume_file, output_folder)
             
         Raises:
             FileNotFoundError: If data folder or required files are missing
@@ -244,7 +273,13 @@ class FileManager:
             logger.info("secrets.yaml not found, using secrets.example.yaml as fallback")
             
         config_file = app_data_folder / 'config.yaml'
-        plain_text_resume_file = app_data_folder / 'plain_text_resume.yaml'
+        
+        # Try new format first, then legacy format for backward compatibility
+        resume_file = app_data_folder / 'resume.yaml'
+        if not resume_file.exists():
+            resume_file = app_data_folder / 'plain_text_resume.yaml'
+            if resume_file.exists():
+                logger.info("Using legacy resume format: plain_text_resume.yaml")
         
         # Check for missing files
         missing_files = []
@@ -252,26 +287,29 @@ class FileManager:
             missing_files.append('secrets.yaml (or secrets.example.yaml)')
         if not config_file.exists():
             missing_files.append('config.yaml')
-        if not plain_text_resume_file.exists():
-            missing_files.append('plain_text_resume.yaml')
+        if not resume_file.exists():
+            missing_files.append('resume.yaml (or plain_text_resume.yaml)')
         
         if missing_files:
             raise FileNotFoundError(f"Missing files in the data folder: {', '.join(missing_files)}")
+        
+        if resume_file.name == 'resume.yaml':
+            logger.info("Using new resume format: resume.yaml")
         
         # Create output folder if it doesn't exist
         output_folder = app_data_folder / 'output'
         output_folder.mkdir(exist_ok=True)
         
-        return secrets_file, config_file, plain_text_resume_file, output_folder
+        return secrets_file, config_file, resume_file, output_folder
 
     @staticmethod
-    def file_paths_to_dict(resume_file: Path | None, plain_text_resume_file: Path) -> dict:
+    def file_paths_to_dict(resume_file: Path | None, resume_yaml_file: Path) -> dict:
         """
         Convert file paths to dictionary format for the application.
         
         Args:
             resume_file: Optional path to PDF resume file
-            plain_text_resume_file: Path to plain text resume YAML file
+            resume_yaml_file: Path to resume YAML file (new or legacy format)
             
         Returns:
             dict: Dictionary containing file paths
@@ -279,10 +317,10 @@ class FileManager:
         Raises:
             FileNotFoundError: If required files are missing
         """
-        if not plain_text_resume_file.exists():
-            raise FileNotFoundError(f"Plain text resume file not found: {plain_text_resume_file}")
+        if not resume_yaml_file.exists():
+            raise FileNotFoundError(f"Resume YAML file not found: {resume_yaml_file}")
         
-        result = {'plainTextResume': plain_text_resume_file}
+        result = {'plainTextResume': resume_yaml_file}
         
         if resume_file is not None:
             if not resume_file.exists():
@@ -315,7 +353,7 @@ def create_and_run_bot(email: str, password: str, parameters: dict, openai_api_k
     Create and execute the LinkedIn job application bot.
     
     This function initializes all bot components and orchestrates the complete
-    job application process.
+    job application process using the new JSON Resume format.
     
     Args:
         email: LinkedIn account email
@@ -333,10 +371,13 @@ def create_and_run_bot(email: str, password: str, parameters: dict, openai_api_k
         apply_component = LinkedInJobManager(browser)
         gpt_answerer_component = GPTAnswerer(openai_api_key)
         
-        # Load and process resume
+        # Load and process resume using new JSON Resume format
         with open(parameters['uploads']['plainTextResume'], "r", encoding='utf-8') as file:
-            plain_text_resume_file = file.read()
-        resume_object = Resume(plain_text_resume_file)
+            resume_file_content = file.read()
+        
+        # Load resume using updated Resume class that handles new format
+        logger.info("Loading resume using updated Resume class with new YAML format")
+        resume_object = Resume(resume_file_content, parameters)
         
         # Initialize and configure bot facade
         bot = LinkedInBotFacade(login_component, apply_component)
@@ -355,7 +396,9 @@ def create_and_run_bot(email: str, password: str, parameters: dict, openai_api_k
 @click.command()
 @click.option('--resume', type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path), 
               help="Path to the resume PDF file")
-def main(resume: Path = None):
+@click.option('--verbose', '-v', is_flag=True, default=False,
+              help="Enable verbose logging (show DEBUG messages on console)")
+def main(resume: Path = None, verbose: bool = False):
     """
     Main entry point for the LinkedIn job application bot.
     
@@ -367,18 +410,26 @@ def main(resume: Path = None):
     Args:
         resume: Optional path to PDF resume file. If not provided, 
                 will use dynamic resume generation from plain text resume.
+        verbose: If True, enables verbose logging (DEBUG messages on console)
     """
     try:
+        # Configure logging based on verbose flag
+        from logging_config import configure_verbose_logging
+        configure_verbose_logging(verbose)
+        
+        if verbose:
+            logger.info("Verbose logging enabled - DEBUG messages will be shown on console")
+        
         # Initialize data folder and validate required files
         data_folder = Path("data_folder")
-        secrets_file, config_file, plain_text_resume_file, output_folder = FileManager.validate_data_folder(data_folder)
+        secrets_file, config_file, resume_yaml_file, output_folder = FileManager.validate_data_folder(data_folder)
         
         # Validate configuration files
         parameters = ConfigValidator.validate_config(config_file)
         email, password, openai_api_key = ConfigValidator.validate_secrets(secrets_file)
         
         # Setup file paths for resume handling
-        parameters['uploads'] = FileManager.file_paths_to_dict(resume, plain_text_resume_file)
+        parameters['uploads'] = FileManager.file_paths_to_dict(resume, resume_yaml_file)
         parameters['outputFileDirectory'] = output_folder
 
         # Create and run the bot

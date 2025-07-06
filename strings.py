@@ -469,17 +469,23 @@ Question: What is your experience with swift?
 numeric_question_template = """The following is a resume and an answered question about the resume, being answered by the person who's resume it is (first person).
 
 ## Rules
-- Answer the question directly (only number).
-- Regarding work experience just check the Experience Details -> Skills Acquired section.
-- Regarding experience in general just check the section Experience Details -> Skills Acquired and also Education Details -> Skills Acquired.
+- Answer the question with a number only (no text, no explanations).
+- Regarding work experience, evaluate based on job titles, responsibilities, and technologies mentioned in work history.
+- Regarding experience in general, consider both work experience and educational background, including courses and projects.
 - If it seems likely that you have the experience based on the resume, even if not explicitly stated on the resume, answer as if you have the experience.
-- If you cannot answer the question, provide answers like "I have no experience with that, but I learn fast, very fast", "not yet, but I will learn".
-- The answer must not be larger than a tweet (140 characters).
+- If you have no experience with the specific technology or skill, answer with 0.
+- For questions about years of experience, answer with a whole number (e.g., 3, 5, 10).
+- For questions about proficiency levels or ratings, use numbers 1-10 where 1 is beginner and 10 is expert.
+- If using a default value, use {default_experience}.
 
 ## Example
 My resume: I'm a software engineer with 10 years of experience on both swift and python.
 Question: how much years experience with swift?
 10
+
+My resume: I'm a software engineer with 10 years of experience on both swift and python.
+Question: how much years experience with Java?
+0
 
 -----
 

@@ -96,61 +96,54 @@ This file defines your job search parameters and bot behavior. Each section cont
       - Marketing
     ```
 
-### 3. plain_text_resume.yaml
+### 3. resume.yaml
 
-This file contains your resume information in a structured format. Fill it out with your personal details, education, work experience, and skills. This information is used to auto-fill application forms and generate customized resumes.
+This file contains your resume information in a structured format following the JSON Resume schema standard. The bot uses this format exclusively:
 
-Each section has specific fields to fill out:
+```yaml
+basics:
+  name: "Your Full Name"
+  label: "Your Professional Title"
+  email: "your.email@example.com"
+  phone: "+1234567890"
+  url: "https://your-website.com"
+  summary: "Brief professional summary"
+  location:
+    city: "Your City"
+    countryCode: "US"
+  profiles:
+    - network: "linkedin"
+      url: "https://linkedin.com/in/yourprofile"
+    - network: "github"
+      url: "https://github.com/yourusername"
 
-- `personal_information:`
-  - Contains basic personal details
-  - Example: `name: "John Doe"`
+education:
+  - institution: "University Name"
+    area: "Computer Science"
+    studyType: "Bachelor"
+    startDate: "2018-09-01"
+    endDate: "2022-06-30"
+    score: "3.8/4.0"
 
-- `self_identification:`
-  - Optional demographic information
-  - Example: `gender: "Male"`
+work:
+  - name: "Company Name"
+    position: "Software Engineer"
+    startDate: "2022-07-01"
+    summary: "Job description"
+    highlights:
+      - "Achievement 1"
+      - "Achievement 2"
 
-- `legal_authorization:`
-  - Work authorization status
-  - Use `true` or `false` for each field
-  - Example: `usWorkAuthorization: true`
+skills:
+  - name: "Programming Languages"
+    keywords: ["Python", "JavaScript", "Java"]
 
-- `work_preferences:`
-  - Your work-related preferences
-  - Use `true` or `false` for each field
-  - Example: `remoteWork: true`
+# Bot-specific configuration is now in config.yaml under resume_config
+```
 
-- `education_details:`
-  - List your educational background
-  - Include degree, university, GPA, graduation year, field of study, and skills acquired
-  - Example:
-    ```yaml
-    - degree: "Bachelor's"
-      university: "University of Example"
-      gpa: "3.8"
-      graduationYear: "2022"
-      fieldOfStudy: "Computer Science"
-      skillsAcquired:
-        problemSolving: "4"
-    ```
+#### Configuration Details
 
-- `experience_details:`
-  - List your work experiences
-  - Include position, company, employment period, location, industry, key responsibilities, and skills acquired
-  - Example:
-    ```yaml
-    - position: "Software Developer"
-      company: "Tech Corp"
-      employmentPeriod: "Jan 2020 - Present"
-      location: "San Francisco, USA"
-      industry: "Technology"
-      keyResponsibilities:
-        responsibility1: "Developed web applications using React"
-      skillsAcquired:
-        adaptability: "3"
-    ```
-
-- Other sections like `projects`, `availability`, `salary_expectations`, `certifications`, `skills`, `languages`, and `interests` follow a similar format, with each item on a new line.
+All bot-specific configuration (legal authorization, work preferences, salary expectations, etc.) is configured in `config.yaml` under the `resume_config` section instead of the resume file.
 
 ### PLUS. data_folder_example
 
@@ -162,7 +155,7 @@ Inside this folder, you'll find example versions of the key files:
 
 - `secrets.yaml`
 - `config.yaml`
-- `plain_text_resume.yaml`
+- `resume.yaml` (JSON Resume format)
 
 These files are already populated with fictitious but realistic data. They show you the correct format and type of information to enter in each file.
 
@@ -173,6 +166,7 @@ Using this folder as a guide can be particularly helpful for:
 1. Understanding the correct structure of each configuration file
 2. Seeing examples of valid data for each field
 3. Having a reference point while filling out your personal files
+4. Understanding the difference between the new JSON Resume format and legacy format
 
 #### Important Note
 
@@ -184,14 +178,14 @@ Using this folder as a guide can be particularly helpful for:
    Ensure that your data_folder contains the following files:
    - `secrets.yaml`
    - `config.yaml`
-   - `plain_text_resume.yaml`
+   - `resume.yaml` (JSON Resume format)
 
 3. **Run the Bot:**
 
    LinkedIn_AIHawk offers flexibility in how it handles your pdf resume:
 
 - **Dynamic Resume Generation:**
-  If you don't use the `--resume` option, the bot will automatically generate a unique resume for each application. This feature uses the information from your `plain_text_resume.yaml` file and tailors it to each specific job application, potentially increasing your chances of success by customizing your resume for each position.
+  If you don't use the `--resume` option, the bot will automatically generate a unique resume for each application. This feature uses the information from your `resume.yaml` file and tailors it to each specific job application, potentially increasing your chances of success by customizing your resume for each position.
    ```bash
    python main.py
    ```

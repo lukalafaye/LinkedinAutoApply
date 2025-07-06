@@ -728,45 +728,94 @@ class LinkedInEasyApplier:
             True  ↦  something was uploaded / selected
             False ↦  nothing done (e.g. we had no local résumé to send)
         """
-        try:
-            file_input = block.find_element(By.CSS_SELECTOR, "input[type='file']")
-        except NoSuchElementException:
+        def _find_file_input():
+            """Helper to re-find file input to avoid stale element issues."""
+            try:
+                return block.find_element(By.CSS_SELECTOR, "input[type='file']")
+            except NoSuchElementException:
+                return None
+
+        file_input = _find_file_input()
+        if not file_input:
             return False
 
         # Identify what the block expects
-        input_id     = (file_input.get_attribute("id") or "").lower()
-        wants_cover  = any(k in input_id for k in ("cover", "motivation"))
+        try:
+            input_id = (file_input.get_attribute("id") or "").lower()
+        except Exception:
+            # If element is stale, re-find it
+            file_input = _find_file_input()
+            if not file_input:
+                return False
+            input_id = (file_input.get_attribute("id") or "").lower()
+
+        wants_cover = any(k in input_id for k in ("cover", "motivation"))
         wants_resume = not wants_cover
 
-        # Make the <input> interact-able
-        self.driver.execute_script(
-            "arguments[0].classList.remove('hidden');", file_input
-        )
+        # Make the <input> interact-able - re-find element before script execution
+        try:
+            fresh_input = _find_file_input()
+            if fresh_input:
+                self.driver.execute_script(
+                    "arguments[0].classList.remove('hidden');", fresh_input
+                )
+        except Exception as e:
+            logger.warning(f"Failed to make input interactable: {e}")
 
         uploaded = False
 
         # ── résumé ─────────────────────────────────────────────────────────
         if wants_resume and self.resume_dir:
-            file_input.send_keys(str(self.resume_dir.resolve()))
-            uploaded = True
+            try:
+                fresh_input = _find_file_input()
+                if fresh_input:
+                    fresh_input.send_keys(str(self.resume_dir.resolve()))
+                    uploaded = True
+            except Exception as e:
+                logger.warning(f"Resume upload failed, retrying: {e}")
+                # Retry once with a fresh element
+                try:
+                    time.sleep(0.5)
+                    fresh_input = _find_file_input()
+                    if fresh_input:
+                        fresh_input.send_keys(str(self.resume_dir.resolve()))
+                        uploaded = True
+                except Exception as e2:
+                    logger.error(f"Resume upload failed after retry: {e2}")
 
         # ── cover letter (generated on-the-fly) ────────────────────────────
         if wants_cover:
-            self._create_and_upload_cover_letter(file_input)
-            uploaded = True
+            try:
+                fresh_input = _find_file_input()
+                if fresh_input:
+                    self._create_and_upload_cover_letter(fresh_input)
+                    uploaded = True
+            except Exception as e:
+                logger.warning(f"Cover letter upload failed: {e}")
 
         if not uploaded:
             return False
 
         # Tell LinkedIn the field changed so it refreshes footer CTA
-        for evt in ("change", "blur"):
-            self.driver.execute_script(
-                "arguments[0].dispatchEvent(new Event(arguments[1],{bubbles:true}));",
-                file_input, evt
-            )
+        try:
+            fresh_input = _find_file_input()
+            if fresh_input:
+                for evt in ("change", "blur"):
+                    try:
+                        self.driver.execute_script(
+                            "arguments[0].dispatchEvent(new Event(arguments[1],{bubbles:true}));",
+                            fresh_input, evt
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to dispatch {evt} event: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to dispatch events on upload field: {e}")
 
         # tiny guard: press ESC once – closes any stray OS picker if one appeared
-        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        try:
+            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        except Exception:
+            pass
         time.sleep(0.2)
 
         return True
@@ -1041,24 +1090,13 @@ class LinkedInEasyApplier:
 
         if not answer:
             generated = True
-            if   "legal first name"         in question_text: answer = "Luka"
-            elif "preferred first name"     in question_text: answer = "Luka"
-            elif "legal last name"          in question_text: answer = "Lafaye de Micheaux"
-            elif ("city" in question_text or "location" in question_text) and not is_numeric:
-                answer = "Paris"
-            elif any(k in question_text for k in (
-                    "mobile phone", "numéro de mobile", "numéro de téléphone",
-                    "téléphone portable", "phone number", "téléphone")):
-                answer = "+33786948497"
-            elif "linkedin profile" in question_text:
-                answer = "https://www.linkedin.com/in/lukalafaye"
-            else:
-                raw = (
-                    self.gpt_answerer.answer_question_numeric(question_text)
-                    if is_numeric
-                    else self.gpt_answerer.answer_question_textual_wide_range(question_text)
-                )
-                answer = raw or ""
+            # Use GPT answerer for all questions instead of hardcoded values
+            raw = (
+                self.gpt_answerer.answer_question_numeric(question_text)
+                if is_numeric
+                else self.gpt_answerer.answer_question_textual_wide_range(question_text)
+            )
+            answer = raw or ""
 
         if is_numeric:
             answer = self._clamp_numeric_answer(answer, 1, 99)

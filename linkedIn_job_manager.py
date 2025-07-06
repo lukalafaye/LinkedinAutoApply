@@ -216,59 +216,6 @@ class LinkedInJobManager:
                 logger.error(f"Error on page {job_page_number}:\n{traceback.format_exc()}")
                 break
 
-
-
-    # def start_applying(self):
-    #     self.easy_applier_component = LinkedInEasyApplier(
-    #         self.driver, self.resume_dir, self.set_old_answers, self.gpt_answerer
-    #     )
-
-    #     searches = list(product(self.positions, self.locations))
-    #     random.shuffle(searches)
-    #     page_sleep = 0
-    #     minimum_time = 3 * 3
-    #     minimum_page_time = time.time() + minimum_time
-
-    #     for position, location in searches:
-    #         location_url = "&location=" + location
-    #         job_page_number = -1
-    #         utils.printyellow(f"Starting the search for {position} in {location}.")
-
-    #         try:
-    #             while True:
-    #                 page_sleep += 1
-    #                 job_page_number += 1
-    #                 utils.printyellow(f"Going to job page {job_page_number}")
-    #                 self.next_job_page(position, location_url, job_page_number)
-    #                 time.sleep(random.uniform(0.2, 1))
-    #                 utils.printyellow("Starting the application process for this page...")
-    #                 self.apply_jobs()
-    #                 utils.printyellow("Applying to jobs on this page has been completed!")
-
-    #                 time_left = minimum_page_time - time.time()
-    #                 if time_left > 0:
-    #                     # utils.printyellow(f"Sleeping for {time_left} seconds.")
-    #                     # time.sleep(time_left)
-    #                     minimum_page_time = time.time() + minimum_time
-    #                 if page_sleep % 5 == 0:
-    #                     # sleep_time = random.randint(5, 34)
-    #                     # utils.printyellow(f"Sleeping for {sleep_time / 60} minutes.")
-    #                     # time.sleep(sleep_time)
-    #                     page_sleep += 1
-    #         except Exception:
-    #             utils.printred(f"Error on page {job_page_number}:\n{traceback.format_exc()}")
-    #             break
-    #         time_left = minimum_page_time - time.time()
-    #         if time_left > 0:
-    #             # utils.printyellow(f"Sleeping for {time_left} seconds.")
-    #             # time.sleep(time_left)
-    #             minimum_page_time = time.time() + minimum_time
-    #         if page_sleep % 5 == 0:
-    #             # sleep_time = random.randint(50, 90)
-    #             # utils.printyellow(f"Sleeping for {sleep_time / 60} minutes.")
-    #             # time.sleep(sleep_time)
-    #             page_sleep += 1
-
     def apply_jobs(self):
         """
         Process all job listings on the current page and attempt to apply.
@@ -381,18 +328,6 @@ class LinkedInJobManager:
 
         with csv_path.open("a", encoding="utf-8", newline="") as fh:
             csv.writer(fh).writerow([answer_type, question_text, gpt_response])
-
-
-    # def record_gpt_answer(self, answer_type, question_text, gpt_response):
-    #     to_write = [answer_type, question_text, gpt_response]
-    #     file_path = self.output_file_directory / "registered_jobs.csv"
-    #     try:
-    #         with open(file_path, 'a', newline='', encoding='utf-8') as f:
-    #             writer = csv.writer(f)
-    #             writer.writerow(to_write)
-    #     except Exception as e:
-    #         utils.printred(f"Error writing registered job: {e}")
-    #         utils.printred(f"Details: Answer type: {answer_type}, Question: {question_text}")
 
     def get_base_search_url(self, parameters):
         url_parts = []
