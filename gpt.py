@@ -28,6 +28,8 @@ import os
 import re
 import textwrap
 from datetime import datetime
+
+from logging_config import logger
 from typing import Dict, List
 
 from dotenv import load_dotenv
@@ -100,6 +102,9 @@ class LLMLogger:
         total_cost = (input_tokens * prompt_price_per_token) + (
             output_tokens * completion_price_per_token
         )
+        
+        # Log API call details to main logger
+        logger.debug(f"[GPT API] Model: {model_name}, Tokens: {total_tokens} (in:{input_tokens}, out:{output_tokens}), Cost: ${total_cost:.6f}")
 
         # Create comprehensive log entry
         log_entry = {
@@ -114,9 +119,13 @@ class LLMLogger:
         }
 
         # Append to log file
-        with open(calls_log, "a", encoding="utf-8") as f:
-            json_string = json.dumps(log_entry, ensure_ascii=False, indent=4)
-            f.write(json_string + "\n")
+        try:
+            with open(calls_log, "a", encoding="utf-8") as f:
+                json_string = json.dumps(log_entry, ensure_ascii=False, indent=4)
+                f.write(json_string + "\n")
+            logger.debug(f"[GPT API] Call logged to {calls_log}")
+        except Exception as e:
+            logger.warning(f"[GPT API] Failed to write to {calls_log}: {e}")
 
 
 class LoggerChatModel:
@@ -342,6 +351,8 @@ class GPTAnswerer:
         Returns:
             AI-generated response based on relevant resume section
         """
+        logger.debug(f"[GPT] Answering textual question (wide range): {question[:100]}...")
+        
         # Define chains for each resume section
         chains = {
             "personal_information": self._create_chain(strings.personal_information_template),
@@ -362,31 +373,64 @@ class GPTAnswerer:
         # Determine which resume section is relevant
         section_prompt = (
             f"For the following question: '{question}', which section of the resume is relevant? "
-            "Respond with one of the following: Personal information, Self Identification, Legal Authorization, "
-            "Work Preferences, Education Details, Experience Details, Projects, Availability, Salary Expectations, "
-            "Certifications, Languages, Interests, Cover letter"
+            "Respond with ONLY ONE of these exact options (no explanation, no markdown, just the text):\n"
+            "Personal information\n"
+            "Self Identification\n"
+            "Legal Authorization\n"
+            "Work Preferences\n"
+            "Education Details\n"
+            "Experience Details\n"
+            "Projects\n"
+            "Availability\n"
+            "Salary Expectations\n"
+            "Certifications\n"
+            "Languages\n"
+            "Interests\n"
+            "Cover letter"
         )
+        logger.debug("[GPT] Determining relevant resume section")
         prompt = ChatPromptTemplate.from_template(section_prompt)
         chain = prompt | self.llm_cheap | StrOutputParser()
         output = chain.invoke({"question": question})
-        section_name = output.lower().replace(" ", "_")
+        
+        # Clean up output (remove markdown, extra text, etc.)
+        output_clean = output.strip().lower()
+        # Remove markdown formatting
+        output_clean = output_clean.replace("**", "").replace("*", "")
+        # Extract just the section name if there's extra text
+        for valid_section in ["personal information", "self identification", "legal authorization",
+                              "work preferences", "education details", "experience details",
+                              "projects", "availability", "salary expectations", "certifications",
+                              "languages", "interests", "cover letter"]:
+            if valid_section in output_clean:
+                output_clean = valid_section
+                break
+        
+        section_name = output_clean.replace(" ", "_")
+        logger.debug(f"[GPT] Selected section: {section_name} (from output: {output.strip()[:50]})")
         
         # Handle cover letter specially
         if section_name == "cover_letter":
+            logger.debug("[GPT] Generating cover letter")
             chain = chains.get(section_name)
             output = chain.invoke({"resume": self.resume, "job_description": self.job_description})
+            logger.debug(f"[GPT] Cover letter generated, length: {len(output)} chars")
             return output
             
         # Get relevant resume section
         resume_section = getattr(self.resume, section_name, None)
         if resume_section is None:
+            logger.error(f"[GPT ERROR] Section '{section_name}' not found in the resume")
             raise ValueError(f"Section '{section_name}' not found in the resume.")
             
         chain = chains.get(section_name)
         if chain is None:
+            logger.error(f"[GPT ERROR] Chain not defined for section '{section_name}'")
             raise ValueError(f"Chain not defined for section '{section_name}'")
             
-        return chain.invoke({"resume_section": resume_section, "question": question})
+        output = chain.invoke({"resume_section": resume_section, "question": question})
+        logger.debug(f"[GPT] Answer generated from {section_name}, length: {len(output)} chars")
+        return output
 
     def answer_question_textual(self, question: str) -> str:
         """
@@ -415,6 +459,8 @@ class GPTAnswerer:
         Returns:
             Numeric answer extracted from AI response
         """
+        logger.debug(f"[GPT] Answering numeric question: {question[:100]}...")
+        
         func_template = self._preprocess_template_string(strings.numeric_question_template)
         prompt = ChatPromptTemplate.from_template(func_template)
         chain = prompt | self.llm_cheap | StrOutputParser()
@@ -424,9 +470,13 @@ class GPTAnswerer:
             "default_experience": default_experience
         })
         
+        logger.debug(f"[GPT] Raw numeric response: {output_str[:100]}")
+        
         try:
             output = self.extract_number_from_string(output_str)
+            logger.debug(f"[GPT] Extracted number: {output}")
         except ValueError:
+            logger.warning(f"[GPT] Could not extract number from response, using default: {default_experience}")
             output = default_experience
         return output
 
@@ -470,3 +520,123 @@ class GPTAnswerer:
         })
         best_option = self.find_best_match(output_str, options)
         return best_option
+
+    def get_numeric_range(self, question: str, error_text: str) -> str:
+        """
+        Determine appropriate min/max range for a numeric question based on validation error.
+        
+        Args:
+            question: The numeric question that failed validation
+            error_text: The validation error message from LinkedIn
+            
+        Returns:
+            String in format "min,max" representing appropriate range
+        """
+        func_template = self._preprocess_template_string(strings.numeric_range_template)
+        prompt = ChatPromptTemplate.from_template(func_template)
+        chain = prompt | self.llm_cheap | StrOutputParser()
+        
+        output_str = chain.invoke({
+            "question": question,
+            "error_text": error_text
+        })
+        
+        # Extract the range from response, fallback to conservative range
+        try:
+            # Look for pattern like "1,99" or "0,10" 
+            range_match = re.search(r"(\d+),(\d+)", output_str)
+            if range_match:
+                return f"{range_match.group(1)},{range_match.group(2)}"
+            else:
+                # Fallback parsing - look for individual numbers
+                numbers = re.findall(r"\d+", output_str)
+                if len(numbers) >= 2:
+                    return f"{numbers[0]},{numbers[1]}"
+                else:
+                    return "1,99"  # Conservative fallback
+        except Exception:
+            return "1,99"  # Safe fallback
+
+    def tailor_resume_to_job(self, job_description: str, base_config_path: str) -> str:
+        """
+        Tailor resume configuration to a specific job by analyzing the job description.
+        
+        Args:
+            job_description: The job description to tailor the resume for
+            base_config_path: Path to the base resume config YAML file
+            
+        Returns:
+            Tailored YAML configuration as a string
+        """
+        logger.info(f"[GPT] Tailoring resume to job")
+        logger.debug(f"[GPT] Base config path: {base_config_path}")
+        logger.debug(f"[GPT] Job description length: {len(job_description)} chars")
+        
+        # Read the base configuration
+        try:
+            with open(base_config_path, 'r', encoding='utf-8') as f:
+                base_config = f.read()
+            logger.debug(f"[GPT] Base config loaded, size: {len(base_config)} bytes")
+        except Exception as e:
+            logger.error(f"[GPT ERROR] Failed to read base config: {e}")
+            return base_config
+        
+        func_template = self._preprocess_template_string(strings.resume_tailoring_template)
+        prompt = ChatPromptTemplate.from_template(func_template)
+        chain = prompt | self.llm_cheap | StrOutputParser()
+        
+        try:
+            logger.debug("[GPT] Sending tailoring request to API")
+            tailored_config = chain.invoke({
+                "job_description": job_description,
+                "base_config": base_config
+            })
+            logger.debug(f"[GPT] Received tailored config, size: {len(tailored_config)} bytes")
+            
+            # Clean up the response - remove markdown code blocks if present
+            if tailored_config.strip().startswith('```yaml'):
+                logger.debug("[GPT] Removing ```yaml markdown wrapper")
+                # Extract content between ```yaml and ```
+                lines = tailored_config.split('\n')
+                start_idx = 0
+                end_idx = len(lines)
+                
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('```yaml'):
+                        start_idx = i + 1
+                    elif line.strip() == '```' and i > start_idx:
+                        end_idx = i
+                        break
+                
+                tailored_config = '\n'.join(lines[start_idx:end_idx])
+            
+            elif tailored_config.strip().startswith('```'):
+                logger.debug("[GPT] Removing ``` markdown wrapper")
+                # Extract content between ``` and ```
+                lines = tailored_config.split('\n')
+                start_idx = 0
+                end_idx = len(lines)
+                
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('```'):
+                        if start_idx == 0:
+                            start_idx = i + 1
+                        else:
+                            end_idx = i
+                            break
+                
+                tailored_config = '\n'.join(lines[start_idx:end_idx])
+            
+            # Validate that the response is valid YAML
+            logger.debug("[GPT] Validating tailored YAML")
+            import yaml
+            yaml.safe_load(tailored_config)
+            logger.info("[GPT] Resume tailoring completed successfully")
+            
+            return tailored_config
+            
+        except Exception as e:
+            logger.warning(f"[GPT] Failed to tailor resume config: {e}")
+            logger.debug("[GPT] Returning original config as fallback")
+            # Return original config if tailoring fails
+            return base_config

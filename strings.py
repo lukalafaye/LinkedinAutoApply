@@ -134,7 +134,7 @@ Ensure that the resume grabs the attention of hiring managers within the first f
 
 Important Note: While making the necessary adjustments to align the resume with the job description, ensure that the overall structure of the resume remains intact. Do not drastically alter the organization of the document, but optimize it to highlight the most relevant points for the desired position.
 
-- **Most important infomation on job descrption:**  
+- **Most important infomation on job descrition:**  
   {job_description}
 
 - **My information resume:**  
@@ -570,3 +570,113 @@ func_summarize_prompt_template = """
         {text_with_placeholders}
         
         ## Text without placeholders:"""
+
+# Numeric Range Template
+numeric_range_template = """You are an expert at analyzing form validation errors and determining appropriate numeric input ranges.
+
+Based on the question and validation error, determine the minimum and maximum values that would be appropriate for this numeric input field.
+
+## Rules
+- Respond ONLY with two numbers separated by a comma: "min,max"
+- Consider the context of the question to determine realistic bounds
+- For salary questions: use very high ranges like "1000,500000" 
+- For experience questions: use typical ranges like "0,50"
+- For rating questions: use the implied scale like "1,10" or "1,5"
+- For age questions: use "16,100"
+- If unsure, use conservative bounds like "1,99"
+
+## Examples
+Question: "What are your salary expectations? (in USD gross/month)"
+Error: "Please enter a valid number"
+1000,500000
+
+Question: "How many years of experience do you have with Python?"
+Error: "Value must be between 0 and 50"
+0,50
+
+Question: "Rate your proficiency in Java (1-10 scale)"
+Error: "Please enter a number between 1 and 10"
+1,10
+
+Question: "What is your age?"
+Error: "Please enter a valid age"
+16,100
+
+-----
+
+## Question:
+{question}
+
+## Validation Error:
+{error_text}
+
+## Appropriate Range:"""
+
+# Resume Tailoring Template
+# Resume Tailoring Template
+resume_tailoring_template = """You are an expert resume writer and job application specialist. Your task is to tailor a resume configuration to a specific job description while maintaining the exact same YAML structure and field names.
+
+## Critical Rules
+- **MAINTAIN the exact same YAML structure and field names**.
+- **DO NOT remove or empty any sections**; all fields must remain intact.
+- **DO NOT change the overall format or organization**; the structure must be preserved.
+- **ONLY modify the content within existing fields** to better match the job description.
+- **ONLY delete irrelevant projects** based on the job description (do not remove those that are related to the job).
+- **Keep all technical details accurate** — do not fabricate or make up experience or skills.
+- **Preserve all dates, company names, and factual information**.
+- Focus on **emphasizing relevant skills** and **rephrasing descriptions** where needed to align with the job description.
+- When tailoring, ensure your focus is on keywords, key phrases, and job-specific terminology that are found in the job description.
+
+## What to Tailor:
+1. **Project Descriptions**:
+   - Reword project descriptions to highlight aspects relevant to the job.
+   - **Remove projects** that are clearly **unrelated** to the job.
+   
+2. **Skills Keywords**:
+   - **Emphasize or reorder skills** based on the keywords in the job description.
+   - Add any **skills or technologies** mentioned in the job description that are missing from the resume.
+
+3. **Work Experience**:
+   - **Rephrase responsibilities** and achievements in previous roles to match the job requirements.
+   - Ensure job titles, duties, and accomplishments are framed to reflect the job description’s focus.
+
+4. **Summary/Objective**:
+   - Adjust the **Summary** or **Objective** section to reflect the specific focus of the role and the job’s primary responsibilities.
+   - Tailor this section to highlight your **most relevant skills and experiences** for the position.
+
+5. **Technical Skills**:
+   - **Reorder** or **rename** technologies to better match the job description.
+   - **Add any missing technical skills** that are specifically mentioned in the job description (if they are within your experience).
+
+## What NOT to Change:
+- **Dates of employment or education**.
+- **Company names** (keep as-is).
+- **Degree titles** and **institution names**.
+- **Basic personal information** (name, contact details).
+- **Overall YAML structure and indentation**.
+- **Field names or keys** in the YAML.
+
+## Instructions:
+Analyze the job description provided below and tailor the base resume configuration to best match the role. Be mindful of the above rules. 
+
+Return **only** the tailored YAML configuration in the format below, **without any markdown code blocks or additional text**. Start directly with the YAML content.
+
+---
+
+## Job Description:
+{job_description}
+
+---
+
+## Base Resume Configuration:
+```yaml
+{base_config}
+```
+
+---
+
+## Instructions:
+Return ONLY the tailored YAML configuration. Do NOT include any markdown code blocks, explanations, or additional text. Start your response directly with the YAML content.
+
+## Tailored Resume Configuration:
+"""

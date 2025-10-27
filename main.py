@@ -364,33 +364,69 @@ def create_and_run_bot(email: str, password: str, parameters: dict, openai_api_k
     Raises:
         RuntimeError: If bot execution fails
     """
+    logger.info("[BOT INIT] Starting bot initialization")
+    
     try:
         # Initialize browser and components
+        logger.info("[BOT INIT] Initializing Chrome browser")
         browser = init_browser()
+        logger.debug(f"[BOT INIT] Browser initialized successfully, session ID: {browser.session_id}")
+        
+        logger.info("[BOT INIT] Creating authentication component")
         login_component = LinkedInAuthenticator(browser)
+        
+        logger.info("[BOT INIT] Creating job manager component")
         apply_component = LinkedInJobManager(browser)
+        
+        logger.info("[BOT INIT] Creating GPT answerer component")
         gpt_answerer_component = GPTAnswerer(openai_api_key)
+        logger.debug("[BOT INIT] GPT answerer initialized with API key")
         
         # Load and process resume using new JSON Resume format
-        with open(parameters['uploads']['plainTextResume'], "r", encoding='utf-8') as file:
+        logger.info("[BOT INIT] Loading resume file")
+        resume_path = parameters['uploads']['plainTextResume']
+        logger.debug(f"[BOT INIT] Resume path: {resume_path}")
+        
+        with open(resume_path, "r", encoding='utf-8') as file:
             resume_file_content = file.read()
+        logger.debug(f"[BOT INIT] Resume file loaded, size: {len(resume_file_content)} bytes")
         
         # Load resume using updated Resume class that handles new format
-        logger.info("Loading resume using updated Resume class with new YAML format")
+        logger.info("[BOT INIT] Loading resume using updated Resume class with new YAML format")
         resume_object = Resume(resume_file_content, parameters)
+        logger.debug(f"[BOT INIT] Resume parsed successfully: {resume_object.personal_information.name}")
         
         # Initialize and configure bot facade
+        logger.info("[BOT INIT] Creating bot facade")
         bot = LinkedInBotFacade(login_component, apply_component)
+        
+        logger.debug("[BOT INIT] Configuring bot with credentials")
         bot.set_secrets(email, password)
+        
+        logger.debug("[BOT INIT] Setting resume in bot")
         bot.set_resume(resume_object)
+        
+        logger.debug("[BOT INIT] Setting GPT answerer in bot")
         bot.set_gpt_answerer(gpt_answerer_component)
+        
+        logger.debug("[BOT INIT] Setting search parameters in bot")
         bot.set_parameters(parameters)
         
+        logger.info("[BOT INIT] Bot initialization complete, starting execution")
+        logger.info("-"*80)
+        
         # Execute the job application process
+        logger.info("[BOT EXEC] Starting LinkedIn login")
         bot.start_login()
+        logger.info("[BOT EXEC] Login completed successfully")
+        
+        logger.info("[BOT EXEC] Starting job application process")
         bot.start_apply()
+        logger.info("[BOT EXEC] Job application process completed")
         
     except Exception as e:
+        logger.error(f"[BOT ERROR] Error running the bot: {str(e)}")
+        logger.exception("[BOT ERROR] Full exception traceback:")
         raise RuntimeError(f"Error running the bot: {str(e)}")
 
 @click.command()
@@ -412,6 +448,12 @@ def main(resume: Path = None, verbose: bool = False):
                 will use dynamic resume generation from plain text resume.
         verbose: If True, enables verbose logging (DEBUG messages on console)
     """
+    # [ENTRY POINT] Starting application
+    logger.info("="*80)
+    logger.info("LinkedIn Auto Apply Bot - Starting")
+    logger.info("="*80)
+    logger.debug(f"[MAIN] Command line arguments: resume={resume}, verbose={verbose}")
+    
     try:
         # Configure logging based on verbose flag
         from logging_config import configure_verbose_logging
@@ -420,34 +462,51 @@ def main(resume: Path = None, verbose: bool = False):
         if verbose:
             logger.info("Verbose logging enabled - DEBUG messages will be shown on console")
         
+        logger.info("[MAIN] Starting file validation and configuration loading")
+        
         # Initialize data folder and validate required files
+        logger.debug("[MAIN] Initializing data folder structure")
         data_folder = Path("data_folder")
         secrets_file, config_file, resume_yaml_file, output_folder = FileManager.validate_data_folder(data_folder)
+        logger.debug(f"[MAIN] Data folder validated: secrets={secrets_file}, config={config_file}, resume={resume_yaml_file}")
         
         # Validate configuration files
+        logger.info("[MAIN] Validating configuration files")
         parameters = ConfigValidator.validate_config(config_file)
+        logger.debug(f"[MAIN] Configuration loaded: positions={len(parameters.get('positions', []))}, locations={len(parameters.get('locations', []))}")
+        
+        logger.info("[MAIN] Validating secrets")
         email, password, openai_api_key = ConfigValidator.validate_secrets(secrets_file)
+        logger.debug(f"[MAIN] Secrets validated: email={email[:3]}***@{email.split('@')[1] if '@' in email else 'unknown'}")
         
         # Setup file paths for resume handling
+        logger.debug("[MAIN] Setting up resume file paths")
         parameters['uploads'] = FileManager.file_paths_to_dict(resume, resume_yaml_file)
         parameters['outputFileDirectory'] = output_folder
+        logger.debug(f"[MAIN] Output directory: {output_folder}")
 
         # Create and run the bot
+        logger.info("[MAIN] Initializing bot components")
         create_and_run_bot(email, password, parameters, openai_api_key)
         
+        logger.info("="*80)
+        logger.info("[MAIN] Bot execution completed successfully")
+        logger.info("="*80)
+        
     except ConfigError as ce:
-        logger.error(f"Configuration error: {str(ce)}")
+        logger.error(f"[MAIN ERROR] Configuration error: {str(ce)}")
         logger.error("Refer to the configuration guide for troubleshooting: https://github.com/feder-cr/LinkedIn_AIHawk_automatic_job_application/blob/main/readme.md#configuration")
     except FileNotFoundError as fnf:
-        logger.error(f"File not found: {str(fnf)}")
+        logger.error(f"[MAIN ERROR] File not found: {str(fnf)}")
         logger.error("Ensure all required files are present in the data folder.")
         logger.error("Refer to the file setup guide: https://github.com/feder-cr/LinkedIn_AIHawk_automatic_job_application/blob/main/readme.md#configuration")
     except RuntimeError as re:
-        logger.error(f"Runtime error: {str(re)}")
+        logger.error(f"[MAIN ERROR] Runtime error: {str(re)}")
         logger.error("Check browser setup and other runtime issues.")
         logger.error("Refer to the configuration and troubleshooting guide: https://github.com/feder-cr/LinkedIn_AIHawk_automatic_job_application/blob/main/readme.md#configuration")
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {str(e)}")
+        logger.error(f"[MAIN ERROR] An unexpected error occurred: {str(e)}")
+        logger.exception("[MAIN ERROR] Full exception traceback:")
         logger.error("Refer to the general troubleshooting guide: https://github.com/feder-cr/LinkedIn_AIHawk_automatic_job_application/blob/main/readme.md#configuration")
 
 

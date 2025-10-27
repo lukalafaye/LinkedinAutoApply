@@ -120,7 +120,7 @@ class LinkedInJobManager:
             
         self.output_file_directory = Path(parameters['outputFileDirectory'])
         self.env_config = EnvironmentKeys()
-        self.old_question()
+        self._load_questions_from_csv()
 
     def set_gpt_answerer(self, gpt_answerer):
         """
@@ -131,15 +131,23 @@ class LinkedInJobManager:
         """
         self.gpt_answerer = gpt_answerer
 
-    def old_question(self):
+    def _load_questions_from_csv(self):
         """
         Load previously answered questions from CSV file for reuse.
         
         Loads answers from 'data_folder/output/old_Questions.csv' to avoid
         asking the same questions repeatedly during application sessions.
+        Filters out invalid placeholder answers.
         """
         self.set_old_answers = {}
         file_path = 'data_folder/output/old_Questions.csv'
+        
+        # Placeholder keywords to filter out (multilingual)
+        placeholders = [
+            "select", "sélect", "selecciona", "seleccione",
+            "choose", "choisissez", "choisir",
+            "opción", "option",
+        ]
         
         if os.path.exists(file_path):
             with open(file_path, 'r', newline='', encoding='utf-8', errors='ignore') as file:
@@ -147,6 +155,14 @@ class LinkedInJobManager:
                 for row in csv_reader:
                     if len(row) == 3:
                         answer_type, question_text, answer = row
+                        
+                        # Validate answer is not a placeholder
+                        if answer:
+                            answer_lower = answer.lower()
+                            if any(placeholder in answer_lower for placeholder in placeholders):
+                                logger.warning(f"Skipping invalid saved answer: '{answer}' for '{question_text}'")
+                                continue
+                        
                         self.set_old_answers[(answer_type.lower(), question_text.lower())] = answer
 
 

@@ -47,6 +47,7 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 
 import utils
 from logging_config import logger
+import resume_generator
 
 warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)    
 
@@ -115,15 +116,31 @@ class LinkedInEasyApplier:
         """
         Persist a new GPT-generated answer both in-memory and on disk.
         
+        Validates that the answer is not a placeholder before saving.
+        
         Args:
             qtype: Type of question (radio, text, dropdown, etc.)
             qtext: The question text
             answer: The generated answer
         """
+        # Don't save placeholder values (multilingual)
+        if answer:
+            answer_lower = answer.lower()
+            placeholders = [
+                "select", "sélect", "selecciona", "seleccione",
+                "choose", "choisissez", "choisir",
+                "opción", "option", 
+                "n/a", "none", "null",
+            ]
+            if any(placeholder in answer_lower for placeholder in placeholders):
+                logger.warning(f"[REMEMBER] Refusing to save placeholder answer: {answer!r} for question: {qtext!r}")
+                return
+        
         key = (qtype.lower(), qtext.lower())
         if any((t.lower(), q.lower()) == key for t, q, _ in self.set_old_answers):
             return
-            
+        
+        logger.debug(f"[REMEMBER] Saving answer: {qtype} | {qtext} → {answer}")
         self.set_old_answers.append((qtype, qtext, answer))
         self.answers[qtext.lower()] = answer
         
@@ -167,6 +184,120 @@ class LinkedInEasyApplier:
                     return answer if options is None or answer in options else None
         return None
 
+    def _smart_dropdown_match(self, question_text: str, options: List[str]) -> Optional[str]:
+        """
+        Intelligently match dropdown options using resume data and pattern recognition.
+        
+        Handles common dropdown fields like phone country codes, emails, and other
+        contact information by matching against resume data, even when field names
+        are in different languages.
+        
+        Args:
+            question_text: The question text (may be in any language)
+            options: List of available dropdown options
+            
+        Returns:
+            Best matching option from the dropdown, or None if no match found
+        """
+        # Normalize question text
+        q_lower = question_text.lower()
+        logger.debug(f"[SMART MATCH] Analyzing question: {question_text!r}")
+        logger.debug(f"[SMART MATCH] Available options: {options}")
+        
+        # Get resume data from GPT answerer
+        try:
+            resume = self.gpt_answerer.resume
+            if not resume:
+                logger.warning("[SMART MATCH] No resume object found in gpt_answerer")
+                return None
+                
+            # Check if resume has personal_information attribute
+            if not hasattr(resume, 'personal_information'):
+                logger.warning("[SMART MATCH] Resume has no 'personal_information' attribute")
+                return None
+                
+            personal_info = resume.personal_information
+            logger.debug(f"[SMART MATCH] Resume info: phone={personal_info.phone}, phonePrefix={personal_info.phonePrefix}, email={personal_info.email}, city={personal_info.city}")
+            
+        except Exception as e:
+            logger.error(f"[SMART MATCH] Error accessing resume: {e}")
+            return None
+        
+        # Phone country code detection (multilingual)
+        phone_keywords = ["phone country", "country code", "código del país", "código país", "code pays", "ländervorwahl", "país", "country"]
+        if any(kw in q_lower for kw in phone_keywords):
+            logger.debug("[SMART MATCH] Detected phone country code question")
+            # Use phonePrefix directly (e.g., "+33")
+            country_code = personal_info.phonePrefix
+            if country_code:
+                logger.debug(f"[SMART MATCH] Using phone prefix from resume: {country_code}")
+                
+                # Try to find option containing this country code
+                for option in options:
+                    if country_code in option:
+                        logger.info(f"[SMART MATCH] ✅ Matched country code option: {option}")
+                        return option
+                
+                logger.warning(f"[SMART MATCH] No option found containing {country_code}")
+            else:
+                logger.warning(f"[SMART MATCH] No phonePrefix in resume")
+        
+        # Email selection (when multiple emails available)
+        email_keywords = ["email", "correo", "e-mail", "courriel"]
+        if any(kw in q_lower for kw in email_keywords):
+            logger.debug("[SMART MATCH] Detected email question")
+            resume_email = personal_info.email
+            if resume_email:
+                logger.debug(f"[SMART MATCH] Looking for email: {resume_email}")
+                
+                # Try exact match first
+                for option in options:
+                    if resume_email.lower() in option.lower():
+                        logger.info(f"[SMART MATCH] ✅ Matched email option: {option}")
+                        return option
+                
+                logger.warning(f"[SMART MATCH] No option found containing {resume_email}")
+            else:
+                logger.warning("[SMART MATCH] No email in resume")
+        
+        # Location/City detection
+        location_keywords = ["city", "location", "ciudad", "ville", "stadt", "ubicación"]
+        if any(kw in q_lower for kw in location_keywords):
+            logger.debug("[SMART MATCH] Detected location question")
+            city = personal_info.city
+            if city:
+                logger.debug(f"[SMART MATCH] Looking for city: {city}")
+                
+                for option in options:
+                    if city.lower() in option.lower():
+                        logger.info(f"[SMART MATCH] ✅ Matched location option: {option}")
+                        return option
+                
+                logger.warning(f"[SMART MATCH] No option found containing {city}")
+            else:
+                logger.warning("[SMART MATCH] No city in resume")
+        
+        # Country detection
+        country_keywords_specific = ["país", "pays", "land"] 
+        if any(kw in q_lower for kw in country_keywords_specific) and "code" not in q_lower and "código" not in q_lower:
+            logger.debug("[SMART MATCH] Detected country question")
+            country = personal_info.country
+            if country:
+                logger.debug(f"[SMART MATCH] Looking for country: {country}")
+                
+                # Try direct match first
+                for option in options:
+                    if country.lower() in option.lower():
+                        logger.info(f"[SMART MATCH] ✅ Matched country option: {option}")
+                        return option
+                
+                logger.warning(f"[SMART MATCH] No option found for country {country}")
+            else:
+                logger.warning("[SMART MATCH] No country in resume")
+        
+        logger.debug("[SMART MATCH] No match found")
+        return None
+
     def _safe_click(self, el: WebElement):
         """
         Safely click an element by defocusing, scrolling into view, and using JS click.
@@ -193,7 +324,8 @@ class LinkedInEasyApplier:
         Main entry point for applying to a LinkedIn job.
         
         Navigates to the job page, finds the Easy Apply button, extracts job description,
-        and handles the complete application form submission process.
+        generates a tailored resume for the specific job, and handles the complete 
+        application form submission process.
         
         Args:
             job: Job object containing job details and URL
@@ -203,18 +335,35 @@ class LinkedInEasyApplier:
         """
         self.driver.get(job.link)
         
+        # Store original resume path to restore later
+        original_resume_dir = self.resume_dir
+        
         try:
             easy_apply_button = self._find_easy_apply_button()
             job_description = self._get_job_description()
             logger.info(f"\n––––– JOB DESCRIPTION for {job.title} –––––\n{job_description}\n–––– end description ––––\n")
             job.set_job_description(job_description)
+            
+            # Generate tailored resume for this specific job
+            tailored_resume_path = self._generate_tailored_resume(job, job_description)
+            if tailored_resume_path and Path(tailored_resume_path).exists():
+                # Update resume path for this job application
+                self.resume_dir = Path(tailored_resume_path)
+                logger.info(f"🎯 Using tailored resume: {tailored_resume_path}")
+            else:
+                logger.warning("Failed to generate tailored resume, using original")
+            
             self._safe_click(easy_apply_button)
             self.gpt_answerer.set_job(job)
             self._fill_application_form()
+            
         except Exception:
             tb_str = traceback.format_exc()
             self._discard_application()
             raise Exception(f"Failed to apply to job! Original exception: \nTraceback:\n{tb_str}")
+        finally:
+            # Restore original resume path for next job
+            self.resume_dir = original_resume_dir
 
     def _stable_key(self, form_el: WebElement) -> str:
         """
@@ -267,7 +416,7 @@ class LinkedInEasyApplier:
         """
         # 1) Wait for any job-details container to appear
         try:
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.jobs-description, #job-details, article.jobs-description__container"))
             )
         except TimeoutException:
@@ -382,10 +531,18 @@ class LinkedInEasyApplier:
                 self._answer_visible_form(form)
             except TimeoutException:
                 logger.debug("No <form> element found - assuming Review page")
-                modal = self.driver.find_element(
-                By.CSS_SELECTOR, "div.jobs-easy-apply-modal__content")
-                self.driver.execute_script(
-                    "arguments[0].scrollTo(0, arguments[0].scrollHeight);", modal)
+                
+                try:
+                    # Wait for the modal to appear and be visible
+                    modal = WebDriverWait(self.driver, 10).until(
+                        EC.visibility_of_element_located((By.CSS_SELECTOR, "div.artdeco-modal--layer-default"))
+                    )
+                    # Scroll within the modal to reveal content
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", modal)
+                    time.sleep(0.5)
+                except TimeoutException:
+                    logger.error("Modal did not appear within timeout or is not visible")
+
                 time.sleep(0.5)
 
                 # ✨ NEW: make sure “Follow Company” is **unchecked**
@@ -393,10 +550,72 @@ class LinkedInEasyApplier:
 
 
             # --- 3️⃣  click Next / Review / Submit
-            if self._next_or_submit():            # ⇢ returns True only on final Submit
-                logger.info("Application submitted successfully ✔")
-                break                             # modal vanished; we’re done
 
+            if self._next_or_submit():  # ⇢ returns True only on final Submit
+                logger.info("Application submitted successfully ✔")
+
+                # --- 4️⃣ Wait for the Post-submit modal (Done / Not Now button)
+                try:
+                    # Wait for the post-submit modal to appear
+                    pop_up_modal = WebDriverWait(self.driver, 10).until(
+                        EC.visibility_of_element_located((By.CSS_SELECTOR, "div.artdeco-modal.artdeco-modal--layer-default"))
+                    )
+                    logger.info("Pop-up modal appeared after submit")
+
+                    # Explicitly wait for the 'Done' or 'Not now' button to appear
+                    # Try multiple selectors for the post-submit modal button
+                    done_button = None
+                    selectors = [
+                        # Modern LinkedIn layout with span text
+                        (By.XPATH, "//button[.//span[normalize-space(text())='Done']] | //button[.//span[normalize-space(text())='Not now']]"),
+                        # Legacy direct text
+                        (By.XPATH, "//button[normalize-space(text())='Done'] | //button[normalize-space(text())='Not now']"),
+                        # CSS selector for primary button in modal footer
+                        (By.CSS_SELECTOR, "div.artdeco-modal__actionbar button.artdeco-button--primary"),
+                        # Fallback to any button in modal footer
+                        (By.CSS_SELECTOR, "div.artdeco-modal__actionbar button")
+                    ]
+                    
+                    for selector_type, selector in selectors:
+                        try:
+                            done_button = WebDriverWait(pop_up_modal, 3).until(
+                                EC.element_to_be_clickable((selector_type, selector))
+                            )
+                            logger.debug(f"Found post-submit button using selector: {selector}")
+                            break
+                        except TimeoutException:
+                            continue
+                    
+                    if not done_button:
+                        raise TimeoutException("Could not find post-submit modal button")
+
+                    # Scroll the button into view to ensure visibility and interaction
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", done_button)
+                    time.sleep(0.5)
+                    
+                    # Get button text for logging
+                    button_text = done_button.text.strip() or done_button.get_attribute("aria-label") or "Done"
+                    
+                    # Click the 'Done' or 'Not now' button using safe click
+                    self._safe_click(done_button)
+                    logger.info(f"Clicked '{button_text}' button successfully")
+
+                    # Allow time for the modal to close and wait for it to disappear
+                    try:
+                        WebDriverWait(self.driver, 5).until(
+                            EC.invisibility_of_element(pop_up_modal)
+                        )
+                        logger.info("Post-submit modal closed successfully")
+                    except TimeoutException:
+                        logger.warning("Modal did not close within timeout, continuing anyway")
+                        
+                    time.sleep(1)
+                except TimeoutException:
+                    logger.error("Timeout waiting for 'Done' or 'Not now' button or modal pop-up")
+                except NoSuchElementException:
+                    logger.error("Could not find 'Done' or 'Not now' button in the modal pop-up")
+
+                break  # Exit the loop after closing the modal and proceed with the next job
 
 
     #         self.driver.execute_script(
@@ -551,10 +770,20 @@ class LinkedInEasyApplier:
             TimeoutException: If no clickable primary button is found
         """
         # Ensure footer is located first
-        footer = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "div.jobs-easy-apply-modal footer"))
-        )
+        try:
+            footer = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "div.jobs-easy-apply-modal footer"))
+            )
+        except TimeoutException:
+            logger.error("[FOOTER] Timeout waiting for Easy Apply modal footer - application may be complete")
+            # Check if we're in a post-submission state
+            try:
+                self.driver.find_element(By.CSS_SELECTOR, "div.artdeco-modal.artdeco-modal--layer-default")
+                logger.debug("[FOOTER] Found generic modal - likely post-submission modal")
+            except NoSuchElementException:
+                logger.debug("[FOOTER] No modal found at all")
+            raise
         # ----------------------------------------------------------------------
 
 
@@ -622,12 +851,17 @@ class LinkedInEasyApplier:
         """
         btn = self._get_primary_action_button()
         label = btn.text.strip() or btn.get_attribute("aria-label")
+        logger.info(f"[BUTTON] Found button: '{label}' (tag: {btn.tag_name}, enabled: {btn.is_enabled()}, displayed: {btn.is_displayed()})")
+        
         if 'submit' in label.lower():
+            logger.info("[BUTTON] Detected SUBMIT button - unfollowing company")
             self._unfollow_company()
+            
         self._safe_click(btn)
-        logger.info(f"Clicked button: '{label}'")
+        logger.info(f"[BUTTON] ✅ Clicked button: '{label}'")
 
         # Wait for either the modal to vanish OR a fresh primary button to render.
+        logger.debug("[WAIT] Waiting for button to become stale or new button to appear...")
         try:
             WebDriverWait(self.driver, 8).until(
                 EC.any_of(
@@ -640,16 +874,29 @@ class LinkedInEasyApplier:
                     ))
                 )
             )
+            logger.debug("[WAIT] ✅ Button transition completed")
         except TimeoutException:
+            logger.error("[WAIT] ❌ Timeout waiting for button transition - checking for errors")
             self._check_for_errors()
             raise
 
-        # If modal no longer exists ⇒ submission finished
+        # Check if Easy Apply modal still exists (not just any modal - confirmation modal is different)
         try:
-            self.driver.find_element(By.CLASS_NAME, "artdeco-modal")
-            return False   # modal still open → more steps
+            easy_apply_modal = self.driver.find_element(By.CSS_SELECTOR, "div.jobs-easy-apply-modal")
+            logger.debug(f"[MODAL CHECK] Easy Apply modal still exists - modal visible: {easy_apply_modal.is_displayed()}")
+            return False   # Easy Apply modal still open → more steps
         except NoSuchElementException:
-            return True    # modal closed     → job applied!
+            # Easy Apply modal closed - either fully submitted or showing confirmation modal
+            logger.info("[MODAL CHECK] ✅ Easy Apply modal closed - application complete")
+            
+            # Check what modal is showing now
+            try:
+                other_modal = self.driver.find_element(By.CSS_SELECTOR, "div.artdeco-modal")
+                logger.debug(f"[MODAL CHECK] Found other modal type: {other_modal.get_attribute('class')}")
+            except NoSuchElementException:
+                logger.debug("[MODAL CHECK] No modal present at all")
+                
+            return True    # Easy Apply process complete
 
 
 
@@ -688,6 +935,45 @@ class LinkedInEasyApplier:
             if e.is_displayed() and e.text.strip()
         ]
         if active_errors:
+            # Dump HTML for debugging
+            try:
+                form = self.driver.find_element(By.TAG_NAME, "form")
+                html_content = form.get_attribute("outerHTML")
+                
+                # Save to debug file
+                debug_dir = Path("debug_html")
+                debug_dir.mkdir(exist_ok=True)
+                
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                debug_file = debug_dir / f"form_error_{timestamp}.html"
+                
+                with open(debug_file, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                
+                logger.error(f"[FORM ERROR] Validation errors found: {active_errors}")
+                logger.error(f"[FORM ERROR] HTML saved to: {debug_file}")
+                
+                # Also log visible form fields
+                try:
+                    visible_selects = self.driver.find_elements(By.TAG_NAME, "select")
+                    logger.error("[FORM ERROR] Visible dropdowns:")
+                    for select in visible_selects:
+                        if select.is_displayed():
+                            try:
+                                label = select.find_element(By.XPATH, "./ancestor::div[@data-test-form-element]//label")
+                                label_text = label.text.strip()
+                            except:
+                                label_text = "Unknown"
+                            
+                            sel = Select(select)
+                            selected = sel.first_selected_option.text
+                            logger.error(f"  - {label_text}: '{selected}'")
+                except Exception as e:
+                    logger.error(f"[FORM ERROR] Could not log dropdown states: {e}")
+                    
+            except Exception as e:
+                logger.error(f"[FORM ERROR] Could not save debug HTML: {e}")
+            
             raise Exception(f"Failed answering or file upload. {active_errors}")
 
     def _discard_application(self) -> None:
@@ -820,7 +1106,7 @@ class LinkedInEasyApplier:
 
         return True
 
-    def _create_and_upload_resume(self, element: WebElement) -> bool:
+    def _create_and_upload_resume(self, element: WebElement) -> None:
         """
         Create and upload a dynamically generated resume PDF.
         
@@ -1014,16 +1300,55 @@ class LinkedInEasyApplier:
             return False
 
 
-    def _clamp_numeric_answer(self,
-                              raw_answer: str,
-                              min_val: int = 1,
-                              max_val: int = 99) -> str:
+    def _clamp_numeric_answer(self, raw_answer, min_val=None, max_val=None):
+        """
+        Clamp numeric answer to given range. If no range provided, return as-is.
+        
+        Args:
+            raw_answer: The numeric answer to clamp
+            min_val: Minimum allowed value (optional)
+            max_val: Maximum allowed value (optional)
+            
+        Returns:
+            String representation of the clamped value
+        """
         try:
-            intval = int(float(raw_answer.strip()))
+            if isinstance(raw_answer, (int, float)):
+                intval = int(raw_answer)
+            else:
+                intval = int(float(str(raw_answer).strip()))
         except Exception:
-            intval = min_val
-        intval = max(min_val, min(max_val, intval))
+            # If we can't parse the number, return 1 as a safe fallback
+            return "1"
+        
+        # Only clamp if bounds are provided
+        if min_val is not None:
+            intval = max(min_val, intval)
+        if max_val is not None:
+            intval = min(max_val, intval)
+            
         return str(intval)
+
+    def _get_numeric_range_from_gpt(self, question_text: str, error_text: str) -> tuple[int, int]:
+        """
+        Ask GPT to determine appropriate min/max values for a numeric question based on error context.
+        
+        Args:
+            question_text: The original question
+            error_text: The validation error message
+            
+        Returns:
+            Tuple of (min_val, max_val) for the question
+        """
+        try:
+            range_response = self.gpt_answerer.get_numeric_range(question_text, error_text)
+            # Parse response like "1,99" or "0,10" 
+            min_val, max_val = map(int, range_response.split(','))
+            return min_val, max_val
+        except Exception as e:
+            logger.warning(f"Failed to get numeric range from GPT: {e}")
+            # Fallback to conservative range
+            return 1, 99
 
     def _handle_multiline_question(self, element: WebElement) -> bool:
         try:
@@ -1048,6 +1373,150 @@ class LinkedInEasyApplier:
             logger.error(f"MULTILINE exception: {exc}")
             return False
 
+    def _handle_typeahead_field(self, element: WebElement, text_field: WebElement, question_text: str) -> bool:
+        """
+        Handle typeahead/autocomplete fields (e.g., city, company name).
+        
+        These fields require:
+        1. Type text
+        2. Wait for dropdown suggestions
+        3. Click a suggestion from the list
+        
+        Args:
+            element: The form element container
+            text_field: The input field
+            question_text: The question text
+            
+        Returns:
+            True if handled successfully
+        """
+        logger.info(f"[TYPEAHEAD] Handling typeahead field: {question_text!r}")
+        
+        # Skip if already filled
+        if text_field.get_attribute("value").strip():
+            logger.debug("[TYPEAHEAD] Field already has value, skipping")
+            text_field.send_keys(Keys.TAB)
+            time.sleep(0.3)
+            return True
+        
+        # Get answer from GPT
+        try:
+            answer = self.gpt_answerer.answer_question_textual_wide_range(question_text)
+            if not answer or not answer.strip():
+                logger.warning("[TYPEAHEAD] No answer from GPT, using N/A")
+                answer = "N/A"
+            
+            logger.debug(f"[TYPEAHEAD] Typing: {answer!r}")
+            
+            # Clear field and type answer
+            text_field.clear()
+            text_field.send_keys(answer)
+            time.sleep(1.5)  # Wait for dropdown to appear
+            
+            # Look for dropdown suggestions
+            try:
+                # LinkedIn uses different dropdown structures
+                dropdown_selectors = [
+                    # Modern typeahead dropdown
+                    (By.CSS_SELECTOR, "div.basic-typeahead__selectable"),
+                    # Alternative selector
+                    (By.CSS_SELECTOR, "div[role='option']"),
+                    # Legacy dropdown
+                    (By.CSS_SELECTOR, "li.typeahead__result-item"),
+                ]
+                
+                suggestions = []
+                for by, selector in dropdown_selectors:
+                    try:
+                        suggestions = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_all_elements_located((by, selector))
+                        )
+                        if suggestions:
+                            logger.debug(f"[TYPEAHEAD] Found {len(suggestions)} suggestions using {selector}")
+                            break
+                    except TimeoutException:
+                        continue
+                
+                if not suggestions:
+                    logger.warning("[TYPEAHEAD] No dropdown suggestions appeared")
+                    # Try pressing Enter or Tab
+                    text_field.send_keys(Keys.TAB)
+                    time.sleep(0.5)
+                    return True
+                
+                # Click first visible suggestion
+                clicked = False
+                for suggestion in suggestions:
+                    try:
+                        if not suggestion.is_displayed():
+                            continue
+                            
+                        suggestion_text = suggestion.text[:50]  # Get text before clicking
+                        logger.info(f"[TYPEAHEAD] ✅ Clicking suggestion: {suggestion_text}")
+                        
+                        # Try ActionChains for more reliable click
+                        from selenium.webdriver.common.action_chains import ActionChains
+                        actions = ActionChains(self.driver)
+                        actions.move_to_element(suggestion).click().perform()
+                        
+                        clicked = True
+                        logger.debug(f"[TYPEAHEAD] Click completed, waiting for value to register...")
+                        time.sleep(1.0)  # Wait for selection to register
+                        break  # Exit loop after successful click
+                        
+                    except Exception as click_error:
+                        error_str = str(click_error).lower()
+                        # Stale element after click is OK - it means the dropdown closed
+                        if "stale element" in error_str:
+                            logger.debug(f"[TYPEAHEAD] Element became stale after click (dropdown closed - this is OK)")
+                            clicked = True
+                            break
+                        logger.warning(f"[TYPEAHEAD] Error clicking suggestion: {click_error}")
+                        continue
+                
+                if clicked:
+                    logger.debug("[TYPEAHEAD] Selection completed, verifying...")
+                    # Give LinkedIn time to update the form
+                    time.sleep(0.5)
+                    
+                    # Try to verify the value was set (best effort)
+                    try:
+                        current_value = text_field.get_attribute("value") or ""
+                        if current_value.strip():
+                            logger.info(f"[TYPEAHEAD] ✅ Field value set to: {current_value[:30]}")
+                        else:
+                            logger.warning(f"[TYPEAHEAD] Field appears empty after click, but continuing...")
+                    except:
+                        # Field might be stale, which is OK
+                        logger.debug("[TYPEAHEAD] Could not verify field value (field may be stale)")
+                    
+                    return True
+                
+                logger.warning("[TYPEAHEAD] No visible suggestions found, pressing Tab")
+                try:
+                    text_field.send_keys(Keys.TAB)
+                except:
+                    pass  # Field might be stale
+                time.sleep(0.5)
+                return True
+                
+            except Exception as e:
+                # Stale element after successful click is OK
+                if "stale element" in str(e).lower():
+                    logger.debug(f"[TYPEAHEAD] Element became stale (dropdown closed after selection)")
+                    return True
+                logger.error(f"[TYPEAHEAD] Error finding dropdown: {e}")
+                # Try to move on - the field might be filled
+                try:
+                    text_field.send_keys(Keys.TAB)
+                except:
+                    pass  # Field might be gone
+                time.sleep(0.5)
+                return True
+                
+        except Exception as e:
+            logger.error(f"[TYPEAHEAD] Error handling typeahead field: {e}")
+            return False
 
 
     # ---------------------------------------------------------------------------
@@ -1077,6 +1546,14 @@ class LinkedInEasyApplier:
         if text_field is None:
             return False
 
+        # Check if this is a typeahead/autocomplete field
+        role = text_field.get_attribute("role") or ""
+        aria_autocomplete = text_field.get_attribute("aria-autocomplete") or ""
+        
+        if role == "combobox" and aria_autocomplete == "list":
+            logger.debug(f"[TYPEAHEAD] Detected typeahead field: {question_text!r}")
+            return self._handle_typeahead_field(element, text_field, question_text)
+
         if text_field.get_attribute("value").strip():
             text_field.send_keys(Keys.TAB)
             time.sleep(0.3)
@@ -1096,21 +1573,70 @@ class LinkedInEasyApplier:
                 if is_numeric
                 else self.gpt_answerer.answer_question_textual_wide_range(question_text)
             )
-            answer = raw or ""
+            # Ensure answer is always a string
+            answer = str(raw) if raw is not None else ""
 
-        if is_numeric:
-            answer = self._clamp_numeric_answer(answer, 1, 99)
+        # Don't clamp by default - let the original answer through first
         if not answer.strip():
             answer = "0" if is_numeric else "N/A"
 
         logger.debug(f"TEXTBOX Q: {question_text!r} → {answer!r}")
-        text_field.clear()
-        text_field.send_keys(answer)
-        text_field.send_keys(Keys.TAB)
-        time.sleep(0.5)
+        
+        # Try to enter the answer
+        self._enter_answer_with_retry(text_field, answer, question_text, is_numeric, generated)
 
-        if generated:
-            self._remember_answer("numeric" if is_numeric else "text", question_text, answer)
+        return True
+
+    def _enter_answer_with_retry(self, text_field: WebElement, answer: str, question_text: str, is_numeric: bool, generated: bool):
+        """
+        Enter answer into text field with intelligent retry on validation errors.
+        
+        If validation fails, asks GPT for appropriate numeric ranges and retries with clamped value.
+        """
+        max_retries = 2
+        
+        for attempt in range(max_retries + 1):
+            try:
+                text_field.clear()
+                text_field.send_keys(answer)
+                text_field.send_keys(Keys.TAB)
+                time.sleep(0.5)
+                
+                # Check for validation errors
+                error_elements = self.driver.find_elements(By.CSS_SELECTOR, ".artdeco-inline-feedback--error")
+                active_errors = [e for e in error_elements if e.is_displayed() and e.text.strip()]
+                
+                if not active_errors:
+                    # Success! Remember the answer if it was generated
+                    if generated:
+                        self._remember_answer("numeric" if is_numeric else "text", question_text, answer)
+                    return
+                    
+                # We have validation errors - handle them
+                if attempt < max_retries and is_numeric:
+                    error_text = " ".join([e.text.strip() for e in active_errors])
+                    logger.debug(f"Validation error for {question_text}: {error_text}")
+                    
+                    # Ask GPT for appropriate range
+                    min_val, max_val = self._get_numeric_range_from_gpt(question_text, error_text)
+                    logger.debug(f"GPT suggested range: {min_val}-{max_val}")
+                    
+                    # Re-clamp the answer with the suggested range
+                    original_answer = answer
+                    answer = self._clamp_numeric_answer(answer, min_val, max_val)
+                    logger.debug(f"Clamped {original_answer} to {answer} using range {min_val}-{max_val}")
+                    
+                    continue  # Retry with clamped value
+                else:
+                    # Final attempt failed or not numeric - log and continue
+                    logger.warning(f"Failed to resolve validation error for {question_text}: {[e.text for e in active_errors]}")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Error entering answer attempt {attempt + 1}: {e}")
+                if attempt == max_retries:
+                    break
+                time.sleep(0.5)
 
         return True
 
@@ -1163,21 +1689,55 @@ class LinkedInEasyApplier:
             dropdown      = element.find_element(By.TAG_NAME, "select")
             select        = Select(dropdown)
 
+            logger.info(f"[DROPDOWN] Processing question: {question_text!r}")
+            
             first = select.first_selected_option.text.strip().lower()
-            if first and not any(tok in first for tok in ("select", "sélect", "choose", "choisissez")) \
+            logger.debug(f"[DROPDOWN] Currently selected: {first!r}")
+            
+            if first and not any(tok in first for tok in ("select", "sélect", "selecciona", "choose", "choisissez")) \
             and not dropdown.is_enabled():
+                logger.debug(f"[DROPDOWN] Already answered and disabled, skipping")
                 return False  # already confirmed
 
             options   = [o.text for o in select.options]
+            logger.debug(f"[DROPDOWN] Available options ({len(options)}): {options[:5]}{'...' if len(options) > 5 else ''}")
+            
+            # First try: exact match from saved answers
+            logger.debug(f"[DROPDOWN] Try 1: Checking saved answers")
             answer    = self._get_answer_from_set("dropdown", question_text, options)
             generated = False
+            
+            if answer:
+                logger.info(f"[DROPDOWN] ✅ Found saved answer: {answer!r}")
+            
+            # Second try: smart matching for common fields (phone country, email, etc.)
             if not answer:
-                placeholder = ("select", "sélect", "choose", "choisissez")
+                logger.debug(f"[DROPDOWN] Try 2: Attempting smart match")
+                answer = self._smart_dropdown_match(question_text, options)
+                if answer:
+                    logger.info(f"[DROPDOWN] ✅ Smart match found: {answer!r}")
+            
+            # Third try: Ask GPT
+            if not answer:
+                logger.debug(f"[DROPDOWN] Try 3: Asking GPT")
+                try:
+                    answer = self.gpt_answerer.answer_question_from_options(question_text, options)
+                    generated = True
+                    logger.info(f"[DROPDOWN] ✅ GPT answered: {answer!r}")
+                except Exception as e:
+                    logger.warning(f"[DROPDOWN] GPT failed: {e}")
+                    answer = None
+            
+            # Last resort: select first non-placeholder option
+            if not answer:
+                logger.warning(f"[DROPDOWN] Try 4: Using fallback (first non-placeholder)")
+                placeholder = ("select", "sélect", "selecciona", "choose", "choisissez", "opción")
                 answer = next((o for o in options if not any(p in o.lower() for p in placeholder)),
-                            options[1])
+                            options[1] if len(options) > 1 else options[0])
                 generated = True
+                logger.warning(f"[DROPDOWN] ⚠️ Fallback selection: {answer!r}")
 
-            logger.debug(f"DROPDOWN Q: {question_text!r} → selecting: {answer!r}")
+            logger.info(f"[DROPDOWN] Final answer: {question_text!r} → {answer!r}")
             self._select_dropdown(dropdown, answer)
 
             for evt in ("change", "blur"):
@@ -1332,3 +1892,58 @@ class LinkedInEasyApplier:
             self._enter_text(text_field, new_answer)
         except NoSuchElementException:
             pass
+
+    def _generate_tailored_resume(self, job: Any, job_description: str) -> str:
+        """
+        Generate a tailored resume for the specific job application.
+        
+        Args:
+            job: Job object containing job details
+            job_description: Full job description text
+            
+        Returns:
+            Path to the generated tailored resume PDF
+        """
+        try:
+            # Get base config path
+            base_config_path = Path(__file__).parent / "resumy" / "myconfig.yaml"
+            
+            if not base_config_path.exists():
+                logger.warning(f"Base config not found: {base_config_path}")
+                return str(self.resume_dir) if self.resume_dir else ""
+            
+            logger.info(f"🎯 Tailoring resume for {job.company} - {job.title}")
+            
+            # Use GPT to tailor the resume configuration
+            tailored_config = self.gpt_answerer.tailor_resume_to_job(
+                job_description, str(base_config_path)
+            )
+            
+            # Validate the tailored configuration
+            if not resume_generator.validate_yaml_config(tailored_config):
+                logger.warning("Invalid tailored config, using original resume")
+                return str(self.resume_dir) if self.resume_dir else ""
+            
+            # Generate the tailored PDF
+            tailored_pdf_path = resume_generator.generate_tailored_resume(
+                company_name=job.company,
+                job_title=job.title,
+                tailored_config_yaml=tailored_config
+            )
+            
+            logger.info(f"✅ Tailored resume generated: {tailored_pdf_path}")
+            
+            # Clean up old resumes periodically
+            resume_generator.cleanup_old_resumes()
+            
+            return tailored_pdf_path
+            
+        except Exception as e:
+            logger.error(f"Failed to generate tailored resume: {e}")
+            # Fallback to original resume if available
+            if self.resume_dir and self.resume_dir.exists():
+                logger.info("Using fallback resume")
+                return str(self.resume_dir)
+            else:
+                logger.warning("No fallback resume available")
+                return ""

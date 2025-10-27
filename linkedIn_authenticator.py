@@ -64,15 +64,25 @@ class LinkedInAuthenticator:
         2. Check if already logged in
         3. Handle login process if needed
         """
-        logger.debug("LinkedInAuthenticator.start - Navigating to LinkedIn homepage...")
-        self.driver.get('https://www.linkedin.com')
+        logger.info("[AUTH] Starting LinkedIn authentication process")
+        logger.debug("[AUTH] Navigating to LinkedIn homepage...")
+        
+        try:
+            self.driver.get('https://www.linkedin.com')
+            logger.debug("[AUTH] Successfully navigated to LinkedIn.com")
+        except Exception as e:
+            logger.error(f"[AUTH ERROR] Failed to navigate to LinkedIn: {e}")
+            raise
+        
         self.wait_for_page_load()
+        logger.debug("[AUTH] Page load complete")
         
         if not self.is_logged_in():
-            logger.info("Not logged in, initiating login process...")
+            logger.info("[AUTH] Not logged in, initiating login process...")
             self.handle_login()
         else:
-            logger.info("Already logged in to LinkedIn")
+            logger.info("[AUTH] Already logged in to LinkedIn")
+            logger.debug(f"[AUTH] Current URL: {self.driver.current_url}")
 
     def handle_login(self) -> None:
         """
@@ -81,23 +91,38 @@ class LinkedInAuthenticator:
         This method manages the login workflow including credential entry,
         form submission, and post-login security checks.
         """
-        logger.debug("LinkedInAuthenticator.handle_login - Navigating to login page...")
-        self.driver.get("https://www.linkedin.com/login")
+        logger.info("[AUTH] Starting login workflow")
+        logger.debug("[AUTH] Navigating to login page...")
+        
+        try:
+            self.driver.get("https://www.linkedin.com/login")
+            logger.debug("[AUTH] Successfully navigated to login page")
+        except Exception as e:
+            logger.error(f"[AUTH ERROR] Failed to navigate to login page: {e}")
+            raise
         
         try:
             # Enter credentials and submit form
+            logger.debug("[AUTH] Entering credentials")
             self.enter_credentials()
+            
+            logger.debug("[AUTH] Submitting login form")
             self.submit_login_form()
             
             # Wait for login to process
+            logger.debug("[AUTH] Waiting for login to process (8 seconds)")
             time.sleep(8)  # Allow time for login processing and redirects
             
             # Handle any security challenges
+            logger.debug("[AUTH] Checking for security challenges")
             self.handle_security_check()
             
+            logger.info("[AUTH] Login workflow completed successfully")
+            
         except NoSuchElementException as e:
-            logger.error(f"LinkedInAuthenticator.handle_login - Login failed: {e}")
-            logger.error("Could not log in to LinkedIn. Please check your credentials.")
+            logger.error(f"[AUTH ERROR] Login failed - element not found: {e}")
+            logger.error("[AUTH ERROR] Could not log in to LinkedIn. Please check your credentials.")
+            raise
 
     def enter_credentials(self) -> None:
         """

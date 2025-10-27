@@ -13,3 +13,6 @@ resume.html
 chrome_profile
 venv
 data_folder/secrets.yaml
+debug_html/
+log.txt
+tailored_resumes/

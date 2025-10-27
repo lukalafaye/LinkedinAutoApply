@@ -78,5 +78,6 @@ def configure_verbose_logging(verbose: bool = False):
             break
 
 
-# Create default logger instance
-logger = setup_logging()
+# Create default logger instance with file output
+# Always write detailed logs to log.txt for debugging
+logger = setup_logging(log_level="DEBUG", log_file="log.txt", verbose=False)

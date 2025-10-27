@@ -1,216 +1,227 @@
-## Installation
+# LinkedIn Auto Job Applier with AI
 
-1. **Download and Install Python:**
+Automate your LinkedIn job applications with AI-powered resume tailoring and intelligent form filling.
 
-   Ensure you have Python installed. If not, download and install it from Python's official website. For detailed instructions, refer to the tutorials:
+## Quick Start
 
-   - [How to Install Python on Windows](https://www.geeksforgeeks.org/how-to-install-python-on-windows/)
-   - [How to Install Python on Linux](https://www.geeksforgeeks.org/how-to-install-python-on-linux/)
-   - [How to Download and Install Python on macOS](https://www.geeksforgeeks.org/how-to-download-and-install-python-latest-version-on-macos-mac-os-x/)
+### Prerequisites
+- Python 3.9 or higher
+- Google Chrome browser
+- OpenAI API key ([Get one here](https://platform.openai.com/api-keys))
+- LinkedIn account with language set to **English**
 
-2. **Download and Install Google Chrome:**
-   - Download and install the latest version of Google Chrome in its default location from the [official website](https://www.google.com/chrome).
+### Installation
 
-3. **Clone the repository:**
+1. **Clone and install:**
    ```bash
-   git clone https://github.com/feder-cr/LinkedIn_AIHawk_automatic_job_application
-   cd LinkedIn_AIHawk_automatic_job_application
-   ```
-
-4. **Install the required packages:**
-   ```bash
+   git clone https://github.com/lukalafaye/LinkedinAutoApply
+   cd LinkedinAutoApply
    pip install -r requirements.txt
    ```
+2. **Set up your configuration files:**
 
-## Configuration
+   Copy the example files from `data_folder_example/` to create your own `data_folder/`:
+   ```bash
+   cp -r data_folder_example data_folder
+   ```
 
-### 1. secrets.yaml
+3. **Edit your credentials in `data_folder/secrets.yaml`:**
+   ```yaml
+   email: your.linkedin@email.com
+   password: your_linkedin_password
+   openai_api_key: sk-your-openai-api-key
+   ```
+   > ⚠️ Never commit this file to version control!
 
-This file contains sensitive information. Never share or commit this file to version control.
+4. **Configure your job search in `data_folder/config.yaml`:**
+   ```yaml
+   remote: true
+   positions:
+     - Software Engineer
+     - Data Scientist
+   locations:
+     - New York
+     - Remote
+   distance: 50
+   ```
 
-- `email: [Your LinkedIn email]`
-  - Replace with your LinkedIn account email address
-- `password: [Your LinkedIn password]`
-  - Replace with your LinkedIn account password
-- `openai_api_key: [Your OpenAI API key]`
-  - Replace with your OpenAI API key for GPT integration
-  - To obtain an API key, follow the tutorial at: https://medium.com/@lorenzozar/how-to-get-your-own-openai-api-key-f4d44e60c327
-  - Note: You need to add credit to your OpenAI account to use the API. You can add credit by visiting the [OpenAI billing dashboard](https://platform.openai.com/account/billing).
-
-
-
-### 2. config.yaml
-
-This file defines your job search parameters and bot behavior. Each section contains options that you can customize:
-
-- `remote: [true/false]`
-  - Set to `true` to include remote jobs, `false` to exclude them
-
-- `experienceLevel:`
-  - Set desired experience levels to `true`, others to `false`
-
-- `jobTypes:`
-  - Set desired job types to `true`, others to `false`
-
-- `date:`
-  - Choose one time range for job postings by setting it to `true`, others to `false`
-
-
-- `positions:`
-  - List job titles you're interested in, one per line
-  - Example:
-    ```yaml
-    positions:
-      - Software Developer
-      - Data Scientist
-    ```
-
-- `locations:`
-  - List locations you want to search in, one per line
-  - Example:
-    ```yaml
-    locations:
-      - Italy
-      - London
-    ```
-
-- `distance: [number]`
-  - Set the radius for your job search in miles
-  - Example: `distance: 50`
-
-- `companyBlacklist:`
-  - List companies you want to exclude from your search, one per line
-  - Example:
-    ```yaml
-    companyBlacklist:
-      - Company X
-      - Company Y
-    ```
-
-- `titleBlacklist:`
-  - List keywords in job titles you want to avoid, one per line
-  - Example:
-    ```yaml
-    titleBlacklist:
-      - Sales
-      - Marketing
-    ```
-
-### 3. resume.yaml
-
-This file contains your resume information in a structured format following the JSON Resume schema standard. The bot uses this format exclusively:
-
-```yaml
-basics:
-  name: "Your Full Name"
-  label: "Your Professional Title"
-  email: "your.email@example.com"
-  phone: "+1234567890"
-  url: "https://your-website.com"
-  summary: "Brief professional summary"
-  location:
-    city: "Your City"
-    countryCode: "US"
-  profiles:
-    - network: "linkedin"
-      url: "https://linkedin.com/in/yourprofile"
-    - network: "github"
-      url: "https://github.com/yourusername"
-
-education:
-  - institution: "University Name"
-    area: "Computer Science"
-    studyType: "Bachelor"
-    startDate: "2018-09-01"
-    endDate: "2022-06-30"
-    score: "3.8/4.0"
-
-work:
-  - name: "Company Name"
-    position: "Software Engineer"
-    startDate: "2022-07-01"
-    summary: "Job description"
-    highlights:
-      - "Achievement 1"
-      - "Achievement 2"
-
-skills:
-  - name: "Programming Languages"
-    keywords: ["Python", "JavaScript", "Java"]
-
-# Bot-specific configuration is now in config.yaml under resume_config
-```
-
-#### Configuration Details
-
-All bot-specific configuration (legal authorization, work preferences, salary expectations, etc.) is configured in `config.yaml` under the `resume_config` section instead of the resume file.
-
-### PLUS. data_folder_example
-
-The `data_folder_example` folder contains a working example of how the files necessary for the bot's operation should be structured and filled out. This folder serves as a practical reference to help you correctly set up your work environment for the LinkedIn job search bot.
-
-#### Contents
-
-Inside this folder, you'll find example versions of the key files:
-
-- `secrets.yaml`
-- `config.yaml`
-- `resume.yaml` (JSON Resume format)
-
-These files are already populated with fictitious but realistic data. They show you the correct format and type of information to enter in each file.
-
-#### Usage
-
-Using this folder as a guide can be particularly helpful for:
-
-1. Understanding the correct structure of each configuration file
-2. Seeing examples of valid data for each field
-3. Having a reference point while filling out your personal files
-4. Understanding the difference between the new JSON Resume format and legacy format
-
-#### Important Note
+5. **Add your resume information in `data_folder/resume.yaml`:**
+   ```yaml
+   basics:
+     name: "Your Name"
+     email: "your.email@example.com"
+     phone: "+1234567890"
+     location:
+       city: "Your City"
+       countryCode: "US"
+   
+   work:
+     - name: "Company Name"
+       position: "Job Title"
+       startDate: "2022-01-01"
+       summary: "Job description"
+   
+   education:
+     - institution: "University Name"
+       area: "Computer Science"
+       studyType: "Bachelor"
+   
+   skills:
+     - name: "Languages"
+       keywords: ["Python", "JavaScript"]
+   ```
 
 ## Usage
-0. **LinkedIn language**
-   To ensure the bot works, your LinkedIn language must be set to English.
-   
-2. **Data Folder:**
-   Ensure that your data_folder contains the following files:
-   - `secrets.yaml`
-   - `config.yaml`
-   - `resume.yaml` (JSON Resume format)
 
-3. **Run the Bot:**
+### Run with AI Resume Tailoring (Recommended)
 
-   LinkedIn_AIHawk offers flexibility in how it handles your pdf resume:
+The bot automatically generates a custom resume for each job:
 
-- **Dynamic Resume Generation:**
-  If you don't use the `--resume` option, the bot will automatically generate a unique resume for each application. This feature uses the information from your `resume.yaml` file and tailors it to each specific job application, potentially increasing your chances of success by customizing your resume for each position.
-   ```bash
-   python main.py
-   ```
-- **Using a Specific Resume:**
-  If you want to use a specific PDF resume for all applications, run the bot with the `--resume` option:
-  ```bash
-  python main.py --resume /path/to/your/resume.pdf
-  ```
+```bash
+python main.py
+```
 
-## Documentation
+**What it does:**
+- 🎯 Analyzes each job description
+- ✏️ Tailors your resume to match requirements
+- 📄 Generates a custom PDF for each application
+- 🤖 Fills forms intelligently using GPT
+- 💾 Saves all tailored resumes in `tailored_resumes/` folder
 
-For detailed information on each component and their respective roles, please refer to the [Documentation](documentation.md) file.
+### Run with Static Resume
+
+Use the same PDF for all applications:
+
+```bash
+python main.py --resume /path/to/your/resume.pdf
+```
+
+### Generate Resume Only
+
+Test resume generation without applying:
+
+```bash
+python generate_resume.py
+python generate_resume.py --output my_resume.pdf
+```
+
+## Features
+
+✅ **Smart Form Filling**
+- Detects dropdowns, text fields, and autocomplete fields
+- Handles multilingual forms (English, French, Spanish, etc.)
+- Saves answers to speed up future applications
+
+✅ **AI-Powered**
+- GPT integration for intelligent answers
+- Resume tailoring for each job
+- Handles complex questions automatically
+
+✅ **Reliable**
+- Comprehensive error handling
+- Debug HTML dumps on errors
+- Detailed logging for troubleshooting
+
+✅ **Configurable**
+- Filter jobs by type, experience, location
+- Blacklist companies or job titles
+- Set application limits
+
+## Configuration Reference
+
+### Job Search Filters (`config.yaml`)
+
+```yaml
+# Job preferences
+remote: true
+experienceLevel:
+  internship: false
+  entry: true
+  associate: true
+  mid-senior level: true
+  director: false
+  executive: false
+
+jobTypes:
+  full-time: true
+  contract: false
+  part-time: false
+  temporary: false
+  internship: false
+  other: false
+  volunteer: false
+
+date:
+  all time: false
+  month: false
+  week: true
+  24 hours: false
+
+# Search parameters
+positions:
+  - Machine Learning Engineer
+  - AI Researcher
+locations:
+  - Paris
+  - Remote
+distance: 50
+
+# Filters
+companyBlacklist:
+  - Company To Avoid
+titleBlacklist:
+  - Sales
+  - Marketing
+```
 
 ## Troubleshooting
 
-- **ChromeDriver Issues:** Ensure ChromeDriver is compatible with your installed Chrome version.
-- **Missing Files:** Verify that all necessary files are present in the data folder.
-- **Invalid YAML:** Check your YAML files for syntax errors.
+**Bot fails on forms:**
+- Check `debug_html/` folder for HTML dumps
+- Review `log.txt` for detailed error messages
+- Ensure LinkedIn language is set to English
+
+**API quota exceeded:**
+- Add credits to your OpenAI account at [billing dashboard](https://platform.openai.com/account/billing)
+- Consider using a static resume to reduce API calls
+
+**ChromeDriver issues:**
+- Ensure Chrome is installed in default location
+- Update Chrome to the latest version
+
+**Validation errors:**
+- Check saved answers in `data_folder/output/old_Questions.csv`
+- Remove any placeholder answers (e.g., "Select an option")
+
+## File Structure
+
+```
+LinkedinAutoApply/
+├── data_folder/              # Your configuration (created from example)
+│   ├── secrets.yaml         # LinkedIn & OpenAI credentials
+│   ├── config.yaml          # Job search configuration
+│   └── resume.yaml          # Your resume information
+├── data_folder_example/      # Example configurations
+├── tailored_resumes/         # AI-generated custom resumes
+├── debug_html/               # HTML dumps for debugging
+├── main.py                   # Main bot script
+├── generate_resume.py        # Standalone resume generator
+└── log.txt                   # Detailed execution logs
+```
+
+## Tips for Best Results
+
+1. **Resume Quality:** Provide detailed information in `resume.yaml` - the AI uses this to tailor applications
+2. **Job Titles:** Use specific position titles that match LinkedIn job postings
+3. **Monitor Logs:** Check `log.txt` regularly to understand what the bot is doing
+4. **Review Tailored Resumes:** Check `tailored_resumes/` folder to see how AI adapts your resume
+5. **Start Small:** Begin with a limited search (1-2 positions, 1 location) to test
 
 ## Credits
 
-### casual-markdown
-- **Description:** This project uses the casual-markdown library, a lightweight regex-based Markdown parser with Table of Contents (TOC) support.
-- **Author:** [casualwriter](https://github.com/casualwriter)
-- **Repository:** [casual-markdown](https://github.com/casualwriter/casual-markdown)
+- **casual-markdown:** Lightweight Markdown parser by [casualwriter](https://github.com/casualwriter/casual-markdown)
+- Built on top of Selenium WebDriver and OpenAI GPT APIs
 
-## Disclaimer
-Developed for educational purposes only. I do not assume any responsibility for this tool use. Users should ensure they comply with LinkedIn's terms of service, any applicable laws and regulations, and ethical considerations when using this tool.
+---
+
+**Note:** This tool is for educational purposes. Users are responsible for complying with LinkedIn's terms of service and applicable laws.
